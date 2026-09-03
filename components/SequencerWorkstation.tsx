@@ -43,6 +43,8 @@ export default function SequencerWorkstation() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [selectedTracks, setSelectedTracks] = useState<string[]>(TRACK_DEFS.map(t => t.id));
   const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
+  const [midiToast, setMidiToast] = useState<{ visible: boolean; fileName: string }>({ visible: false, fileName: '' });
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [grid, setGrid] = useState<Record<string, boolean[]>>(() => {
     const initial: Record<string, boolean[]> = {};
@@ -509,7 +511,12 @@ export default function SequencerWorkstation() {
       });
 
       setGrid(newGrid);
-      alert('MIDI imported and mapped to sequencer steps!');
+      // Show toast — auto-dismiss after 3 s
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setMidiToast({ visible: true, fileName: file.name });
+      toastTimerRef.current = setTimeout(() => {
+        setMidiToast(prev => ({ ...prev, visible: false }));
+      }, 3000);
     } catch (err: any) {
       console.error(err);
       alert('Failed to parse MIDI file: ' + (err?.message || err));
@@ -786,6 +793,80 @@ export default function SequencerWorkstation() {
             {i + 1}
           </div>
         ))}
+      </div>
+
+      {/* MIDI Import Toast */}
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 32,
+          right: 32,
+          zIndex: 9999,
+          pointerEvents: 'none',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 10
+        }}
+      >
+        <div
+          style={{
+            background: 'linear-gradient(135deg, #0d1b2a 0%, #1a2a3a 100%)',
+            border: '1px solid #00e5ff44',
+            borderRadius: 14,
+            padding: '14px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            boxShadow: '0 8px 32px #000a, 0 0 0 1px #00e5ff22',
+            minWidth: 260,
+            maxWidth: 360,
+            transform: midiToast.visible ? 'translateY(0) scale(1)' : 'translateY(20px) scale(0.96)',
+            opacity: midiToast.visible ? 1 : 0,
+            transition: 'opacity 0.35s cubic-bezier(0.4,0,0.2,1), transform 0.35s cubic-bezier(0.4,0,0.2,1)',
+          }}
+        >
+          {/* Checkmark circle */}
+          <div
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: '50%',
+              background: 'radial-gradient(circle, #00e676 0%, #00b248 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              boxShadow: '0 0 14px #00e67688'
+            }}
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <polyline points="4,10 8,14 16,6" stroke="#000" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: '#00e676', fontWeight: 800, fontSize: 13, letterSpacing: '0.5px' }}>
+              MIDI IMPORTED
+            </div>
+            <div
+              style={{
+                color: '#90a4ae',
+                fontSize: 11,
+                marginTop: 2,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+              title={midiToast.fileName}
+            >
+              {midiToast.fileName}
+            </div>
+            <div style={{ color: '#546e7a', fontSize: 10, marginTop: 4 }}>
+              Mapped to sequencer steps
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
