@@ -146,4 +146,17 @@ input[type="checkbox"] {
 input[type="checkbox"]:hover {
   transform: scale(1.15);
 }
+
+select {
+  font-family: inherit;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+select:hover {
+  border-color: #00e5ff88 !important;
+}
+
+select:focus {
+  border-color: #00e5ff !important;
+}
 

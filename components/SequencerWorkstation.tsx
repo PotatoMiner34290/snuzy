@@ -4,6 +4,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import { Midi } from '@tonejs/midi';
 
+export interface SoundPreset {
+  id: string;
+  name: string;
+  note?: string;
+  engine?: string; // override engine or timbre setting
+}
+
 export interface TrackDef {
   id: string;
   name: string;
@@ -11,28 +18,233 @@ export interface TrackDef {
   type: 'membrane' | 'sub808' | 'noise' | 'synth' | 'metal' | 'metal_open' | 'tom' | 'rim' | 'cowbell' | 'fm' | 'acid' | 'poly' | 'pluck' | 'am' | 'space' | 'wobble';
   note: string;
   color: string;
+  presets: SoundPreset[];
 }
 
 export const TRACK_DEFS: TrackDef[] = [
   // Drums & Percussion
-  { id: 'kick', name: 'Punch Kick', category: 'Drums', type: 'membrane', note: 'C1', color: '#ff4b4b' },
-  { id: 'sub_808', name: '808 Sub Boom', category: 'Drums', type: 'sub808', note: 'A#0', color: '#ff1744' },
-  { id: 'snare', name: 'Snare Drum', category: 'Drums', type: 'noise', note: '', color: '#ff8800' },
-  { id: 'clap', name: 'Stereo Clap', category: 'Drums', type: 'synth', note: 'D#4', color: '#ff9100' },
-  { id: 'hihat', name: 'Closed Hat', category: 'Drums', type: 'metal', note: '32n', color: '#ffd000' },
-  { id: 'openhat', name: 'Open Hat', category: 'Drums', type: 'metal_open', note: '8n', color: '#ffea00' },
-  { id: 'tom', name: 'Low/Mid Tom', category: 'Drums', type: 'tom', note: 'G1', color: '#d500f9' },
-  { id: 'rimshot', name: 'Wood Rimshot', category: 'Drums', type: 'rim', note: 'F4', color: '#e040fb' },
-  { id: 'cowbell', name: '808 Cowbell', category: 'Drums', type: 'cowbell', note: 'G#4', color: '#651fff' },
+  {
+    id: 'kick',
+    name: 'Punch Kick',
+    category: 'Drums',
+    type: 'membrane',
+    note: 'C1',
+    color: '#ff4b4b',
+    presets: [
+      { id: 'punch', name: 'Punch C1', note: 'C1' },
+      { id: 'deep', name: 'Deep A0', note: 'A0' },
+      { id: 'tight', name: 'Tight D1', note: 'D1' },
+      { id: 'hard', name: 'Hard F1', note: 'F1' }
+    ]
+  },
+  {
+    id: 'sub_808',
+    name: '808 Sub Boom',
+    category: 'Drums',
+    type: 'sub808',
+    note: 'A#0',
+    color: '#ff1744',
+    presets: [
+      { id: 'heavy', name: 'Boom A#0', note: 'A#0' },
+      { id: 'low_c', name: 'Deep C0', note: 'C0' },
+      { id: 'mid_d', name: 'Mid D#0', note: 'D#0' },
+      { id: 'punch_f', name: 'Thump F0', note: 'F0' }
+    ]
+  },
+  {
+    id: 'snare',
+    name: 'Snare Drum',
+    category: 'Drums',
+    type: 'noise',
+    note: '',
+    color: '#ff8800',
+    presets: [
+      { id: 'crisp', name: 'Crisp 16n', note: '16n' },
+      { id: 'tight', name: 'Tight 32n', note: '32n' },
+      { id: 'fat', name: 'Fat 8n', note: '8n' },
+      { id: 'snap', name: 'Snap 24n', note: '24n' }
+    ]
+  },
+  {
+    id: 'clap',
+    name: 'Stereo Clap',
+    category: 'Drums',
+    type: 'synth',
+    note: 'D#4',
+    color: '#ff9100',
+    presets: [
+      { id: 'standard', name: 'Studio D#4', note: 'D#4' },
+      { id: 'high', name: 'Bright G#4', note: 'G#4' },
+      { id: 'low', name: 'Warm C4', note: 'C4' },
+      { id: 'trap', name: 'Trap F4', note: 'F4' }
+    ]
+  },
+  {
+    id: 'hihat',
+    name: 'Closed Hat',
+    category: 'Drums',
+    type: 'metal',
+    note: '32n',
+    color: '#ffd000',
+    presets: [
+      { id: 'tite', name: 'Tight 32n', note: '32n' },
+      { id: 'micro', name: 'Micro 64n', note: '64n' },
+      { id: 'click', name: 'Click 16n', note: '16n' }
+    ]
+  },
+  {
+    id: 'openhat',
+    name: 'Open Hat',
+    category: 'Drums',
+    type: 'metal_open',
+    note: '8n',
+    color: '#ffea00',
+    presets: [
+      { id: 'sizzle', name: 'Sizzle 8n', note: '8n' },
+      { id: 'long', name: 'Long 4n', note: '4n' },
+      { id: 'short', name: 'Short 16n', note: '16n' }
+    ]
+  },
+  {
+    id: 'tom',
+    name: 'Low/Mid Tom',
+    category: 'Drums',
+    type: 'tom',
+    note: 'G1',
+    color: '#d500f9',
+    presets: [
+      { id: 'low', name: 'Low G1', note: 'G1' },
+      { id: 'mid', name: 'Mid C2', note: 'C2' },
+      { id: 'high', name: 'High E2', note: 'E2' }
+    ]
+  },
+  {
+    id: 'rimshot',
+    name: 'Wood Rimshot',
+    category: 'Drums',
+    type: 'rim',
+    note: 'F4',
+    color: '#e040fb',
+    presets: [
+      { id: 'wood', name: 'Wood F4', note: 'F4' },
+      { id: 'click', name: 'Click A4', note: 'A4' },
+      { id: 'sidestick', name: 'Side C5', note: 'C5' }
+    ]
+  },
+  {
+    id: 'cowbell',
+    name: '808 Cowbell',
+    category: 'Drums',
+    type: 'cowbell',
+    note: 'G#4',
+    color: '#651fff',
+    presets: [
+      { id: 'standard', name: 'Classic G#4', note: 'G#4' },
+      { id: 'high', name: 'High C#5', note: 'C#5' },
+      { id: 'low', name: 'Low E4', note: 'E4' }
+    ]
+  },
 
   // Bass & Leads
-  { id: 'bass', name: 'Sub Bass FM', category: 'Bass', type: 'fm', note: 'C2', color: '#00e676' },
-  { id: 'acid_bass', name: 'Acid Reso Bass', category: 'Bass', type: 'acid', note: 'F1', color: '#76ff03' },
-  { id: 'synth_lead', name: 'Lead Saw Synth', category: 'Synth', type: 'poly', note: 'C4', color: '#ff4081' },
-  { id: 'pluck', name: 'Hyper Pluck', category: 'Synth', type: 'pluck', note: 'E4', color: '#f50057' },
-  { id: 'chord_pad', name: 'Keystick / Pad', category: 'Synth', type: 'am', note: 'G3', color: '#00b0ff' },
-  { id: 'space_pad', name: 'Ambient Cosmos', category: 'Synth', type: 'space', note: 'C3', color: '#00e5ff' },
-  { id: 'wobble', name: 'LFO Wobble Synth', category: 'Synth', type: 'wobble', note: 'D2', color: '#1de9b6' }
+  {
+    id: 'bass',
+    name: 'Sub Bass FM',
+    category: 'Bass',
+    type: 'fm',
+    note: 'C2',
+    color: '#00e676',
+    presets: [
+      { id: 'c2', name: 'Root C2', note: 'C2' },
+      { id: 'f1', name: 'Sub Low F1', note: 'F1' },
+      { id: 'g1', name: 'Warm G1', note: 'G1' },
+      { id: 'a1', name: 'Mid A1', note: 'A1' },
+      { id: 'e2', name: 'High E2', note: 'E2' }
+    ]
+  },
+  {
+    id: 'acid_bass',
+    name: 'Acid Reso Bass',
+    category: 'Bass',
+    type: 'acid',
+    note: 'F1',
+    color: '#76ff03',
+    presets: [
+      { id: 'f1', name: 'Acid F1', note: 'F1' },
+      { id: 'c2', name: 'Squelch C2', note: 'C2' },
+      { id: 'd1', name: 'Deep D1', note: 'D1' },
+      { id: 'a1', name: 'Reso A1', note: 'A1' }
+    ]
+  },
+  {
+    id: 'synth_lead',
+    name: 'Lead Saw Synth',
+    category: 'Synth',
+    type: 'poly',
+    note: 'C4',
+    color: '#ff4081',
+    presets: [
+      { id: 'c4', name: 'Lead C4', note: 'C4' },
+      { id: 'e4', name: 'Bright E4', note: 'E4' },
+      { id: 'g4', name: 'Fifth G4', note: 'G4' },
+      { id: 'c5', name: 'High C5', note: 'C5' }
+    ]
+  },
+  {
+    id: 'pluck',
+    name: 'Hyper Pluck',
+    category: 'Synth',
+    type: 'pluck',
+    note: 'E4',
+    color: '#f50057',
+    presets: [
+      { id: 'e4', name: 'Crisp E4', note: 'E4' },
+      { id: 'a4', name: 'Sharp A4', note: 'A4' },
+      { id: 'c4', name: 'Warm C4', note: 'C4' },
+      { id: 'b4', name: 'Stab B4', note: 'B4' }
+    ]
+  },
+  {
+    id: 'chord_pad',
+    name: 'Keystick / Pad',
+    category: 'Synth',
+    type: 'am',
+    note: 'G3',
+    color: '#00b0ff',
+    presets: [
+      { id: 'g3', name: 'Lush G3', note: 'G3' },
+      { id: 'c3', name: 'Deep C3', note: 'C3' },
+      { id: 'f3', name: 'Dreamy F3', note: 'F3' },
+      { id: 'd4', name: 'Airy D4', note: 'D4' }
+    ]
+  },
+  {
+    id: 'space_pad',
+    name: 'Ambient Cosmos',
+    category: 'Synth',
+    type: 'space',
+    note: 'C3',
+    color: '#00e5ff',
+    presets: [
+      { id: 'c3', name: 'Cosmos C3', note: 'C3' },
+      { id: 'g2', name: 'Sub G2', note: 'G2' },
+      { id: 'a3', name: 'Ether A3', note: 'A3' },
+      { id: 'e3', name: 'Nebula E3', note: 'E3' }
+    ]
+  },
+  {
+    id: 'wobble',
+    name: 'LFO Wobble Synth',
+    category: 'Synth',
+    type: 'wobble',
+    note: 'D2',
+    color: '#1de9b6',
+    presets: [
+      { id: 'd2', name: 'Heavy D2', note: 'D2' },
+      { id: 'f2', name: 'Growl F2', note: 'F2' },
+      { id: 'a1', name: 'Deep A1', note: 'A1' },
+      { id: 'c2', name: 'Dark C2', note: 'C2' }
+    ]
+  }
 ];
 
 export const DEFAULT_STEPS = 16;
@@ -45,6 +257,24 @@ export default function SequencerWorkstation() {
   const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
   const [midiToast, setMidiToast] = useState<{ visible: boolean; fileName: string }>({ visible: false, fileName: '' });
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Active track sound preset selections { [trackId]: presetId }
+  const [trackPresets, setTrackPresets] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    TRACK_DEFS.forEach(t => {
+      initial[t.id] = t.presets[0]?.id || '';
+    });
+    return initial;
+  });
+
+  // Track lines removed/hidden by user { [trackId]: boolean }
+  const [removedTracks, setRemovedTracks] = useState<Record<string, boolean>>({});
+
+  // Category collapse state { 'Drums': false, 'Bass': false, 'Synth': false }
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
+
+  const trackPresetsRef = useRef(trackPresets);
+  useEffect(() => { trackPresetsRef.current = trackPresets; }, [trackPresets]);
 
   const [grid, setGrid] = useState<Record<string, boolean[]>>(() => {
     const initial: Record<string, boolean[]> = {};
@@ -270,6 +500,12 @@ export default function SequencerWorkstation() {
     };
   }, []);
 
+  const getTrackActiveNote = (trackDef: TrackDef) => {
+    const selectedPresetId = trackPresetsRef.current[trackDef.id];
+    const preset = trackDef.presets.find(p => p.id === selectedPresetId);
+    return preset?.note || trackDef.note;
+  };
+
   const triggerInstrument = async (trackDef: TrackDef, time?: number) => {
     try {
       if (Tone.context.state !== 'running') {
@@ -278,21 +514,22 @@ export default function SequencerWorkstation() {
       const inst = instrumentsRef.current[trackDef.id];
       if (!inst) return;
       const triggerTime = time !== undefined ? Math.max(time, Tone.now()) : Tone.now();
+      const currentNote = getTrackActiveNote(trackDef);
 
       if (trackDef.type === 'membrane' || trackDef.type === 'sub808' || trackDef.type === 'tom') {
-        inst.triggerAttackRelease(trackDef.note || 'C1', '8n', triggerTime);
+        inst.triggerAttackRelease(currentNote || 'C1', '8n', triggerTime);
       } else if (trackDef.type === 'noise') {
-        inst.triggerAttackRelease('16n', triggerTime);
+        inst.triggerAttackRelease(currentNote || '16n', triggerTime);
       } else if (trackDef.type === 'metal' || trackDef.type === 'metal_open' || trackDef.type === 'cowbell') {
-        inst.triggerAttackRelease(trackDef.note || '32n', triggerTime);
+        inst.triggerAttackRelease(currentNote || '32n', triggerTime);
       } else if (trackDef.type === 'fm' || trackDef.type === 'synth' || trackDef.type === 'rim') {
-        inst.triggerAttackRelease(trackDef.note || 'C3', '8n', triggerTime);
+        inst.triggerAttackRelease(currentNote || 'C3', '8n', triggerTime);
       } else if (trackDef.type === 'acid' || trackDef.type === 'wobble') {
-        inst.triggerAttackRelease(trackDef.note || 'C2', '8n', triggerTime);
+        inst.triggerAttackRelease(currentNote || 'C2', '8n', triggerTime);
       } else if (trackDef.type === 'pluck') {
-        inst.triggerAttackRelease(trackDef.note || 'C4', '16n', triggerTime);
+        inst.triggerAttackRelease(currentNote || 'C4', '16n', triggerTime);
       } else if (trackDef.type === 'poly' || trackDef.type === 'am' || trackDef.type === 'space') {
-        inst.triggerAttackRelease(trackDef.note || 'C4', '8n', triggerTime);
+        inst.triggerAttackRelease(currentNote || 'C4', '8n', triggerTime);
       }
     } catch (e) {
       // Catch any overlapping audio thread collision
@@ -341,20 +578,21 @@ export default function SequencerWorkstation() {
               const inst = instrumentsRef.current[track.id];
               if (inst) {
                 try {
+                  const currentNote = getTrackActiveNote(track);
                   if (track.type === 'membrane' || track.type === 'sub808' || track.type === 'tom') {
-                    inst.triggerAttackRelease(track.note || 'C1', '8n', time);
+                    inst.triggerAttackRelease(currentNote || 'C1', '8n', time);
                   } else if (track.type === 'noise') {
-                    inst.triggerAttackRelease('16n', time);
+                    inst.triggerAttackRelease(currentNote || '16n', time);
                   } else if (track.type === 'metal' || track.type === 'metal_open' || track.type === 'cowbell') {
-                    inst.triggerAttackRelease(track.note || '32n', time);
+                    inst.triggerAttackRelease(currentNote || '32n', time);
                   } else if (track.type === 'fm' || track.type === 'synth' || track.type === 'rim') {
-                    inst.triggerAttackRelease(track.note || 'C3', '8n', time);
+                    inst.triggerAttackRelease(currentNote || 'C3', '8n', time);
                   } else if (track.type === 'acid' || track.type === 'wobble') {
-                    inst.triggerAttackRelease(track.note || 'C2', '8n', time);
+                    inst.triggerAttackRelease(currentNote || 'C2', '8n', time);
                   } else if (track.type === 'pluck') {
-                    inst.triggerAttackRelease(track.note || 'C4', '16n', time);
+                    inst.triggerAttackRelease(currentNote || 'C4', '16n', time);
                   } else if (track.type === 'poly' || track.type === 'am' || track.type === 'space') {
-                    inst.triggerAttackRelease(track.note || 'C4', '8n', time);
+                    inst.triggerAttackRelease(currentNote || 'C4', '8n', time);
                   }
                 } catch (err) {
                   // Catch any timing collision silently
@@ -677,7 +915,7 @@ export default function SequencerWorkstation() {
           marginBottom: 16
         }}
       >
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button
             onClick={() => setSelectedTracks(TRACK_DEFS.map(t => t.id))}
             className="btn-toolbar"
@@ -699,6 +937,16 @@ export default function SequencerWorkstation() {
           >
             Clear Pattern
           </button>
+          {Object.values(removedTracks).some(Boolean) && (
+            <button
+              onClick={() => setRemovedTracks({})}
+              className="btn-toolbar"
+              style={{ padding: '6px 12px', background: '#1c313a', color: '#00e5ff', border: '1px solid #00e5ff55', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
+              title="Restore all hidden track lines"
+            >
+              ↺ Restore Hidden Tracks ({Object.values(removedTracks).filter(Boolean).length})
+            </button>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -740,123 +988,197 @@ export default function SequencerWorkstation() {
 
       {/* Sequencer Grid */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, backgroundColor: '#131620', padding: 16, borderRadius: 10 }}>
-        {TRACK_DEFS.map((track, trackIdx) => {
-          const isSelected = selectedTracks.includes(track.id);
-          const isHeld = holdTones[track.id];
-          const prevTrack = trackIdx > 0 ? TRACK_DEFS[trackIdx - 1] : null;
-          const isNewCategory = !prevTrack || prevTrack.category !== track.category;
+        {(['Drums', 'Bass', 'Synth'] as const).map(category => {
+          const categoryTracks = TRACK_DEFS.filter(t => t.category === category);
+          const isCollapsed = !!collapsedCategories[category];
+          const activeCategoryTracks = categoryTracks.filter(t => !removedTracks[t.id]);
+          const catColor = category === 'Drums' ? '#ff9100' : category === 'Bass' ? '#00e676' : '#00e5ff';
 
           return (
-            <React.Fragment key={track.id}>
-              {isNewCategory && (
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '1px',
-                    color: track.category === 'Drums' ? '#ff9100' : track.category === 'Bass' ? '#00e676' : '#00e5ff',
-                    marginTop: trackIdx > 0 ? 10 : 0,
-                    marginBottom: 2,
-                    paddingLeft: 4
-                  }}
-                >
-                  ● {track.category}
-                </div>
-              )}
+            <div key={category} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Category Expand/Collapse Header */}
               <div
+                onClick={() => setCollapsedCategories(prev => ({ ...prev, [category]: !prev[category] }))}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: '170px 72px repeat(16, 1fr)',
-                  gap: 6,
+                  display: 'flex',
                   alignItems: 'center',
-                  opacity: isSelected ? 1 : 0.4,
-                  transition: 'opacity 0.2s'
+                  justifyContent: 'space-between',
+                  padding: '5px 8px',
+                  backgroundColor: '#191e2b',
+                  borderRadius: 5,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  borderLeft: `4px solid ${catColor}`,
+                  marginTop: category === 'Drums' ? 0 : 8
                 }}
+                title="Click to collapse / expand this section"
               >
-                {/* Track Info & Enable */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 8px',
-                    backgroundColor: '#1b2030',
-                    borderRadius: 6,
-                    borderLeft: `4px solid ${track.color}`
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => toggleTrackSelect(track.id)}
-                    title="Enable/Disable Track in mix"
-                    style={{ accentColor: track.color, cursor: 'pointer' }}
-                  />
-                  <button
-                    onClick={() => triggerInstrument(track)}
-                    className="track-label-btn"
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#f0f3f6',
-                      cursor: 'pointer',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      textAlign: 'left',
-                      padding: 0,
-                      flex: 1
-                    }}
-                    title="Click to preview synth sound"
-                  >
-                    {track.name}
-                  </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', color: catColor }}>
+                  <span>{isCollapsed ? '▶' : '▼'}</span>
+                  <span>{category}</span>
+                  <span style={{ fontSize: 10, color: '#90a4ae', fontWeight: 500, textTransform: 'none' }}>
+                    ({activeCategoryTracks.length} tracks{categoryTracks.length > activeCategoryTracks.length ? ` • ${categoryTracks.length - activeCategoryTracks.length} hidden` : ''})
+                  </span>
                 </div>
-
-                {/* Hold / Key-Stick Toggle */}
-                <button
-                  onClick={() => toggleHold(track.id)}
-                  className="btn-hold"
-                  style={{
-                    padding: '6px 0',
-                    fontSize: 11,
-                    fontWeight: 800,
-                    borderRadius: 6,
-                    border: isHeld ? `1px solid ${track.color}` : '1px solid #37474f',
-                    backgroundColor: isHeld ? track.color : '#1c2130',
-                    color: isHeld ? '#000' : '#b0bec5',
-                    cursor: 'pointer',
-                    textTransform: 'uppercase'
-                  }}
-                  title="Continuous hold / key-stick note sustain for every step"
-                >
-                  {isHeld ? 'HELD' : 'HOLD'}
-                </button>
-
-                {/* 16 Step Pads */}
-                {grid[track.id].map((active, stepIdx) => {
-                  const isGroupFour = stepIdx % 4 === 0;
-
-                  let padBackground = '#202638';
-                  if (active) padBackground = track.color;
-                  else if (isHeld) padBackground = `${track.color}44`;
-
-                  return (
-                    <div
-                      key={stepIdx}
-                      onClick={() => togglePad(track.id, stepIdx)}
-                      className={`pad-cell step-col-${stepIdx}`}
-                      style={{
-                        backgroundColor: padBackground,
-                        border: isGroupFour ? '1px solid #455a64' : '1px solid #283145',
-                        boxShadow: active ? `0 0 6px ${track.color}88` : 'none'
-                      }}
-                      title={`Step ${stepIdx + 1}`}
-                    />
-                  );
-                })}
+                <div style={{ fontSize: 11, color: '#78909c' }}>
+                  {isCollapsed ? 'Click to expand' : 'Collapse'}
+                </div>
               </div>
-            </React.Fragment>
+
+              {/* Tracks in Category */}
+              {!isCollapsed && activeCategoryTracks.map(track => {
+                const isSelected = selectedTracks.includes(track.id);
+                const isHeld = holdTones[track.id];
+                const activePreset = trackPresets[track.id] || track.presets[0]?.id;
+
+                return (
+                  <div
+                    key={track.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '170px 72px repeat(16, 1fr)',
+                      gap: 6,
+                      alignItems: 'center',
+                      opacity: isSelected ? 1 : 0.4,
+                      transition: 'opacity 0.2s'
+                    }}
+                  >
+                    {/* Track Info, Sound Preset Picker & Remove Line Button */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '4px 6px',
+                        backgroundColor: '#1b2030',
+                        borderRadius: 6,
+                        borderLeft: `4px solid ${track.color}`,
+                        minWidth: 0,
+                        overflow: 'hidden'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleTrackSelect(track.id)}
+                        title="Enable/Disable Track in mix"
+                        style={{ accentColor: track.color, cursor: 'pointer', flexShrink: 0 }}
+                      />
+                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+                        <button
+                          onClick={() => triggerInstrument(track)}
+                          className="track-label-btn"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#f0f3f6',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            textAlign: 'left',
+                            padding: 0,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                          }}
+                          title="Click to preview synth sound"
+                        >
+                          {track.name}
+                        </button>
+                        {/* Sound Variant Dropdown */}
+                        <select
+                          value={activePreset}
+                          onChange={e => setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value }))}
+                          style={{
+                            background: '#131722',
+                            color: track.color,
+                            border: '1px solid #2e384d',
+                            borderRadius: 3,
+                            fontSize: 10,
+                            padding: '1px 3px',
+                            marginTop: 2,
+                            cursor: 'pointer',
+                            outline: 'none'
+                          }}
+                          title="Change sound timbre / pitch preset"
+                        >
+                          {track.presets.map(p => (
+                            <option key={p.id} value={p.id} style={{ background: '#171b26', color: '#fff' }}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Remove Track Line Button */}
+                      <button
+                        onClick={() => setRemovedTracks(prev => ({ ...prev, [track.id]: true }))}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#546e7a',
+                          cursor: 'pointer',
+                          fontSize: 14,
+                          padding: '0 2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}
+                        title="Remove track line (can be restored from toolbar)"
+                        onMouseEnter={e => (e.currentTarget.style.color = '#ff5252')}
+                        onMouseLeave={e => (e.currentTarget.style.color = '#546e7a')}
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    {/* Hold / Key-Stick Toggle */}
+                    <button
+                      onClick={() => toggleHold(track.id)}
+                      className="btn-hold"
+                      style={{
+                        padding: '6px 0',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        borderRadius: 6,
+                        border: isHeld ? `1px solid ${track.color}` : '1px solid #37474f',
+                        backgroundColor: isHeld ? track.color : '#1c2130',
+                        color: isHeld ? '#000' : '#b0bec5',
+                        cursor: 'pointer',
+                        textTransform: 'uppercase'
+                      }}
+                      title="Continuous hold / key-stick note sustain for every step"
+                    >
+                      {isHeld ? 'HELD' : 'HOLD'}
+                    </button>
+
+                    {/* 16 Step Pads */}
+                    {grid[track.id].map((active, stepIdx) => {
+                      const isGroupFour = stepIdx % 4 === 0;
+
+                      let padBackground = '#202638';
+                      if (active) padBackground = track.color;
+                      else if (isHeld) padBackground = `${track.color}44`;
+
+                      return (
+                        <div
+                          key={stepIdx}
+                          onClick={() => togglePad(track.id, stepIdx)}
+                          className={`pad-cell step-col-${stepIdx}`}
+                          style={{
+                            backgroundColor: padBackground,
+                            border: isGroupFour ? '1px solid #455a64' : '1px solid #283145',
+                            boxShadow: active ? `0 0 6px ${track.color}88` : 'none'
+                          }}
+                          title={`Step ${stepIdx + 1}`}
+                        />
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           );
         })}
       </div>
