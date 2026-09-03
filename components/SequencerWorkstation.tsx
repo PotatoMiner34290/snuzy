@@ -491,26 +491,58 @@ export default function SequencerWorkstation() {
   const handleMidiImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Reset input so the same file can be re-imported later
+    e.target.value = '';
+
     try {
       const buffer = await file.arrayBuffer();
       const imported = new Midi(buffer);
+
+      // --- Stop sequencer cleanly before touching the grid ---
+      // This prevents the playback loop from reading a half-updated grid
+      // and scrambling the playhead / step counters.
+      if (isPlaying) {
+        Tone.Transport.stop();
+        if (repeatIdRef.current !== null) {
+          Tone.Transport.clear(repeatIdRef.current);
+          repeatIdRef.current = null;
+        }
+        setIsPlaying(false);
+        stepRef.current = 0;
+        const cache = stepColCacheRef.current;
+        if (cache.length > 0) {
+          cache.forEach(c => c.step.forEach(el => el.classList.remove('step-current')));
+        } else {
+          document.querySelectorAll('.step-current').forEach(el => el.classList.remove('step-current'));
+        }
+        stepColCacheRef.current = [];
+      }
+
+      // --- Tick-based quantization (no BPM drift, no float errors) ---
+      // @tonejs/midi exposes n.ticks (integer) and header.ppq (ticks per quarter).
+      // A 16th note = ppq / 4 ticks. This is immune to BPM mismatch between
+      // the MIDI file's embedded tempo and the current slider value.
+      const ppq = imported.header.ppq || 480;
+      const ticksPer16th = ppq / 4;
 
       const newGrid: Record<string, boolean[]> = {};
       TRACK_DEFS.forEach(t => {
         newGrid[t.id] = Array(DEFAULT_STEPS).fill(false);
       });
 
-      const secondsPer16th = 60 / bpm / 4;
-
       imported.tracks.forEach((t, i) => {
+        if (t.notes.length === 0) return; // skip empty/meta tracks
         const assignedTrackDef = TRACK_DEFS[i % TRACK_DEFS.length];
         t.notes.forEach(n => {
-          const stepIndex = Math.round(n.time / secondsPer16th) % DEFAULT_STEPS;
+          // Use integer ticks — no floating point rounding error
+          const stepIndex = Math.round(n.ticks / ticksPer16th) % DEFAULT_STEPS;
           newGrid[assignedTrackDef.id][stepIndex] = true;
         });
       });
 
       setGrid(newGrid);
+
       // Show toast — auto-dismiss after 3 s
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       setMidiToast({ visible: true, fileName: file.name });
