@@ -657,6 +657,9 @@ export default function SequencerWorkstation() {
       if (Tone.context.state !== 'running') {
         await Tone.start();
       }
+      const triggerTime = time !== undefined ? Math.max(time, Tone.now()) : Tone.now();
+      const currentNote = getTrackActiveNote(trackDef);
+
       if (trackDef.type === 'soundfont') {
         const gmId = trackGmInstrumentsRef.current[trackDef.id] ?? trackDef.defaultGmId ?? 0;
         const player = soundFontPlayerRef.current;
@@ -674,8 +677,6 @@ export default function SequencerWorkstation() {
 
       const inst = instrumentsRef.current[trackDef.id];
       if (!inst) return;
-      const triggerTime = time !== undefined ? Math.max(time, Tone.now()) : Tone.now();
-      const currentNote = getTrackActiveNote(trackDef);
 
       if (trackDef.type === 'membrane' || trackDef.type === 'sub808' || trackDef.type === 'tom') {
         inst.triggerAttackRelease(currentNote || 'C1', '8n', triggerTime);
