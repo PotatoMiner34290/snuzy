@@ -311,12 +311,28 @@ export default function SequencerWorkstation() {
   // Master limiter ref for cleanup
   const limiterRef = useRef<Tone.Limiter | null>(null);
 
+  const refreshStepColCache = () => {
+    stepColCacheRef.current = Array.from({ length: DEFAULT_STEPS }, (_, i) => ({
+      step: Array.from(document.querySelectorAll<HTMLElement>(`.step-col-${i}`))
+    }));
+  };
+
   useEffect(() => { holdTonesRef.current = holdTones; }, [holdTones]);
   useEffect(() => { gridRef.current = grid; }, [grid]);
   useEffect(() => {
     selectedTracksRef.current = selectedTracks;
     selectedTracksSetRef.current = new Set(selectedTracks);
   }, [selectedTracks]);
+
+  // When categories collapse/expand or tracks are removed/restored, refresh cached pad DOM elements
+  useEffect(() => {
+    if (isPlaying) {
+      // Allow DOM to finish mounting/unmounting new track rows
+      requestAnimationFrame(() => {
+        refreshStepColCache();
+      });
+    }
+  }, [collapsedCategories, removedTracks, isPlaying]);
 
   // Real-time BPM update
   useEffect(() => {
@@ -561,9 +577,7 @@ export default function SequencerWorkstation() {
       stepRef.current = 0;
 
       // Pre-cache all step-col DOM elements once so Tone.Draw never queries the DOM per tick
-      stepColCacheRef.current = Array.from({ length: DEFAULT_STEPS }, (_, i) => ({
-        step: Array.from(document.querySelectorAll<HTMLElement>(`.step-col-${i}`))
-      }));
+      refreshStepColCache();
 
       repeatIdRef.current = Tone.Transport.scheduleRepeat((time: number) => {
         const step = stepRef.current;
@@ -604,8 +618,11 @@ export default function SequencerWorkstation() {
 
         // Use cached DOM arrays — zero querySelectorAll cost in the hot path
         Tone.Draw.schedule(() => {
-          const cache = stepColCacheRef.current;
-          if (cache.length === 0) return;
+          let cache = stepColCacheRef.current;
+          if (cache.length === 0) {
+            refreshStepColCache();
+            cache = stepColCacheRef.current;
+          }
           const prevStep = (step - 1 + DEFAULT_STEPS) % DEFAULT_STEPS;
           cache[prevStep]?.step.forEach(el => el.classList.remove('step-current'));
           cache[step]?.step.forEach(el => el.classList.add('step-current'));
