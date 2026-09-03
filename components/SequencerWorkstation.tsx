@@ -571,15 +571,61 @@ export default function SequencerWorkstation() {
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 26, color: '#00e5ff', fontWeight: 800, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0 }}>
-            {'SNUZY DRUM & SYNTH WORKSTATION'.split('').map((char, i) => (
-              <span
-                key={i}
-                className="title-wave-letter"
-                style={{ animationDelay: `${i * 0.1}s`, display: 'inline-block', whiteSpace: 'pre' }}
-              >
-                {char}
-              </span>
-            ))}
+            {(() => {
+              const text = 'SNUZY DRUM & SYNTH WORKSTATION';
+              const len = text.length; // 30
+              const stepSec = 0.115; // ~65 BPM step per letter
+              const pauseSec = 0.2; // Turnaround pause at each end
+              const fwdTime = len * stepSec; // ~3.45s
+              const revTime = len * stepSec; // ~3.45s
+              const totalCycle = fwdTime + pauseSec + revTime + pauseSec; // ~7.3s
+
+              // Keyframe definition injected once
+              const keyframes = text.split('').map((_, i) => {
+                const fwdPeakSec = i * stepSec + 0.1;
+                const revPeakSec = fwdTime + pauseSec + (len - 1 - i) * stepSec + 0.1;
+
+                const fwdStart = (((fwdPeakSec - 0.12) / totalCycle) * 100).toFixed(2);
+                const fwdPeak = ((fwdPeakSec / totalCycle) * 100).toFixed(2);
+                const fwdLand = (((fwdPeakSec + 0.18) / totalCycle) * 100).toFixed(2);
+
+                const revStart = (((revPeakSec - 0.12) / totalCycle) * 100).toFixed(2);
+                const revPeak = ((revPeakSec / totalCycle) * 100).toFixed(2);
+                const revLand = (((revPeakSec + 0.18) / totalCycle) * 100).toFixed(2);
+
+                return `
+                  @keyframes titleJumpLetter_${i} {
+                    0%, 100% { transform: translateY(0) scale(1); }
+                    ${fwdStart}% { transform: translateY(0) scale(1); }
+                    ${fwdPeak}% { transform: translateY(-9px) scale(1.22); }
+                    ${fwdLand}% { transform: translateY(0) scale(1); }
+                    ${revStart}% { transform: translateY(0) scale(1); }
+                    ${revPeak}% { transform: translateY(-9px) scale(1.22); }
+                    ${revLand}% { transform: translateY(0) scale(1); }
+                  }
+                `;
+              }).join('\n');
+
+              return (
+                <>
+                  <style>{keyframes}</style>
+                  {text.split('').map((char, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        display: 'inline-block',
+                        transformOrigin: 'bottom center',
+                        willChange: 'transform',
+                        whiteSpace: 'pre',
+                        animation: `titleJumpLetter_${i} ${totalCycle.toFixed(2)}s cubic-bezier(0.25, 1, 0.5, 1) infinite`
+                      }}
+                    >
+                      {char}
+                    </span>
+                  ))}
+                </>
+              );
+            })()}
           </h1>
           <p style={{ margin: '4px 0 0', color: '#90a4ae', fontSize: 13 }}>
             Tone.js Audio Synthesis • Multi-layer Looper • MIDI File Exporter & Importer
