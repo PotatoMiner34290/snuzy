@@ -671,17 +671,12 @@ export default function SequencerWorkstation() {
     setGrid(empty);
   };
 
-  const exportMidi = () => {
-    try {
-      const midi = new Midi();
-      midi.header.tempos = [{ bpm: bpm, ticks: 0 }];
-      midi.header.timeSignatures = [{ timeSignature: [4, 4], ticks: 0 }];
-      midi.header.update();
-
-      const ppq = midi.header.ppq || 480;
-      const ticksPer16th = Math.round(ppq / 4);
-
-      const pitchMapping: Record<string, number> = {
+  // Helper to convert note names (e.g. 'C2', 'D#4', 'A#0') into standard MIDI pitch numbers (0-127)
+  const getMidiPitchForTrack = (track: TrackDef): number => {
+    const activeNote = getTrackActiveNote(track);
+    // If it's a rhythmic length like '16n', '32n', fallback to default pitch mapping
+    if (!activeNote || activeNote.endsWith('n')) {
+      const fallbackPitchMapping: Record<string, number> = {
         kick: 36,
         sub_808: 34,
         snare: 38,
@@ -699,17 +694,38 @@ export default function SequencerWorkstation() {
         space_pad: 48,
         wobble: 38
       };
+      return fallbackPitchMapping[track.id] || 60;
+    }
+    try {
+      return Math.round(Tone.Frequency(activeNote).toMidi());
+    } catch {
+      return 60;
+    }
+  };
+
+  const exportMidi = () => {
+    try {
+      const midi = new Midi();
+      midi.header.tempos = [{ bpm: bpm, ticks: 0 }];
+      midi.header.timeSignatures = [{ timeSignature: [4, 4], ticks: 0 }];
+      midi.header.update();
+
+      const ppq = midi.header.ppq || 480;
+      const ticksPer16th = Math.round(ppq / 4);
 
       let notesAdded = 0;
 
       TRACK_DEFS.forEach(track => {
         if (!selectedTracks.includes(track.id)) return;
+        if (removedTracks[track.id]) return; // Skip tracks removed by user
+
         const trackNotes = grid[track.id];
         const isHeld = holdTones[track.id];
         const midiTrack = midi.addTrack();
-        midiTrack.name = track.name;
+        const activePreset = trackPresets[track.id] || track.presets[0]?.id;
+        midiTrack.name = `${track.name} (${activePreset})`;
 
-        const midiPitch = pitchMapping[track.id] || 60;
+        const midiPitch = getMidiPitchForTrack(track);
 
         for (let s = 0; s < DEFAULT_STEPS; s++) {
           if (trackNotes[s] || isHeld) {
@@ -749,6 +765,43 @@ export default function SequencerWorkstation() {
     }
   };
 
+  // Export full project file (.json) that saves 100% of sequencer settings:
+  // BPM, grid patterns, sound presets for all instruments, active tracks, holds, and collapsed categories!
+  const exportProject = () => {
+    try {
+      const projectData = {
+        app: 'snuzy-workstation',
+        version: '1.0',
+        timestamp: Date.now(),
+        bpm,
+        grid,
+        trackPresets,
+        selectedTracks,
+        holdTones,
+        removedTracks,
+        collapsedCategories
+      };
+
+      const jsonStr = JSON.stringify(projectData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `snuzy_project_${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 500);
+    } catch (err: any) {
+      console.error('Error exporting project:', err);
+      alert('Failed to export project: ' + (err?.message || err));
+    }
+  };
+
   const handleMidiImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -757,12 +810,32 @@ export default function SequencerWorkstation() {
     e.target.value = '';
 
     try {
+      // Check if user uploaded a complete Snuzy project JSON file
+      if (file.name.endsWith('.json')) {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (data.app === 'snuzy-workstation') {
+          if (typeof data.bpm === 'number') setBpm(data.bpm);
+          if (data.grid) setGrid(data.grid);
+          if (data.trackPresets) setTrackPresets(data.trackPresets);
+          if (data.selectedTracks) setSelectedTracks(data.selectedTracks);
+          if (data.holdTones) setHoldTones(data.holdTones);
+          if (data.removedTracks) setRemovedTracks(data.removedTracks);
+          if (data.collapsedCategories) setCollapsedCategories(data.collapsedCategories);
+
+          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+          setMidiToast({ visible: true, fileName: `${file.name} (Full Project Restored)` });
+          toastTimerRef.current = setTimeout(() => {
+            setMidiToast(prev => ({ ...prev, visible: false }));
+          }, 3500);
+          return;
+        }
+      }
+
       const buffer = await file.arrayBuffer();
       const imported = new Midi(buffer);
 
       // --- Stop sequencer cleanly before touching the grid ---
-      // This prevents the playback loop from reading a half-updated grid
-      // and scrambling the playhead / step counters.
       if (isPlaying) {
         Tone.Transport.stop();
         if (repeatIdRef.current !== null) {
@@ -781,9 +854,6 @@ export default function SequencerWorkstation() {
       }
 
       // --- Tick-based quantization (no BPM drift, no float errors) ---
-      // @tonejs/midi exposes n.ticks (integer) and header.ppq (ticks per quarter).
-      // A 16th note = ppq / 4 ticks. This is immune to BPM mismatch between
-      // the MIDI file's embedded tempo and the current slider value.
       const ppq = imported.header.ppq || 480;
       const ticksPer16th = ppq / 4;
 
@@ -792,16 +862,19 @@ export default function SequencerWorkstation() {
         newGrid[t.id] = Array(DEFAULT_STEPS).fill(false);
       });
 
-      // Filter out meta/tempo tracks (0 notes) BEFORE indexing,
-      // so the slot counter i is never thrown off by skipped tracks.
-      // Your stress test has 1 empty tempo track + 16 instrument tracks —
-      // without this filter every track would be shifted one slot to the right.
+      // Also restore BPM if embedded in MIDI file
+      if (imported.header.tempos && imported.header.tempos.length > 0) {
+        const fileBpm = Math.round(imported.header.tempos[0].bpm);
+        if (fileBpm >= 60 && fileBpm <= 180) {
+          setBpm(fileBpm);
+        }
+      }
+
       const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
 
       instrumentTracks.forEach((t, i) => {
         const assignedTrackDef = TRACK_DEFS[i % TRACK_DEFS.length];
         t.notes.forEach(n => {
-          // Use integer ticks — no floating point rounding error
           const stepIndex = Math.round(n.ticks / ticksPer16th) % DEFAULT_STEPS;
           newGrid[assignedTrackDef.id][stepIndex] = true;
         });
@@ -817,7 +890,7 @@ export default function SequencerWorkstation() {
       }, 3000);
     } catch (err: any) {
       console.error(err);
-      alert('Failed to parse MIDI file: ' + (err?.message || err));
+      alert('Failed to parse file: ' + (err?.message || err));
     }
   };
 
@@ -980,9 +1053,26 @@ export default function SequencerWorkstation() {
               display: 'inline-block'
             }}
           >
-            ↑ Load MIDI
-            <input type="file" accept=".mid,.midi" onChange={handleMidiImport} style={{ display: 'none' }} />
+            ↑ Load File
+            <input type="file" accept=".mid,.midi,.json" onChange={handleMidiImport} style={{ display: 'none' }} />
           </label>
+
+          <button
+            onClick={exportProject}
+            className="btn-toolbar"
+            style={{
+              padding: '7px 16px',
+              backgroundColor: '#00e676',
+              color: '#000',
+              fontWeight: 700,
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 13
+            }}
+          >
+            ↓ Save Project (.json)
+          </button>
 
           <button
             onClick={exportMidi}
@@ -998,7 +1088,7 @@ export default function SequencerWorkstation() {
               fontSize: 13
             }}
           >
-            ↓ Export to MIDI (.mid)
+            ↓ Export MIDI (.mid)
           </button>
         </div>
       </div>
