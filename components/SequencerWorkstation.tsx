@@ -3,6 +3,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import { Midi } from '@tonejs/midi';
+import {
+  GM_INSTRUMENTS,
+  getInstrumentsByCategory,
+  SoundFontPlayer,
+  GMInstrument
+} from './SoundFontEngine';
 
 export interface SoundPreset {
   id: string;
@@ -14,11 +20,12 @@ export interface SoundPreset {
 export interface TrackDef {
   id: string;
   name: string;
-  category: 'Drums' | 'Bass' | 'Synth';
-  type: 'membrane' | 'sub808' | 'noise' | 'synth' | 'metal' | 'metal_open' | 'tom' | 'rim' | 'cowbell' | 'fm' | 'acid' | 'poly' | 'pluck' | 'am' | 'space' | 'wobble';
+  category: 'Drums' | 'Bass' | 'Synth' | 'SoundFont Instruments';
+  type: 'membrane' | 'sub808' | 'noise' | 'synth' | 'metal' | 'metal_open' | 'tom' | 'rim' | 'cowbell' | 'fm' | 'acid' | 'poly' | 'pluck' | 'am' | 'space' | 'wobble' | 'soundfont';
   note: string;
   color: string;
   presets: SoundPreset[];
+  defaultGmId?: number;
 }
 
 export const TRACK_DEFS: TrackDef[] = [
@@ -244,6 +251,69 @@ export const TRACK_DEFS: TrackDef[] = [
       { id: 'a1', name: 'Deep A1', note: 'A1' },
       { id: 'c2', name: 'Dark C2', note: 'C2' }
     ]
+  },
+
+  // Realistic General MIDI SoundFont Instruments (FluidR3 GM Sampler)
+  {
+    id: 'sf_piano',
+    name: 'Concert Piano',
+    category: 'SoundFont Instruments',
+    type: 'soundfont',
+    note: 'C4',
+    color: '#f9a825',
+    defaultGmId: 0, // Acoustic Grand Piano
+    presets: [
+      { id: 'c4', name: 'Middle C4', note: 'C4' },
+      { id: 'e4', name: 'Bright E4', note: 'E4' },
+      { id: 'g4', name: 'Fifth G4', note: 'G4' },
+      { id: 'c3', name: 'Warm C3', note: 'C3' },
+      { id: 'c5', name: 'High C5', note: 'C5' }
+    ]
+  },
+  {
+    id: 'sf_guitar',
+    name: 'Acoustic Guitar',
+    category: 'SoundFont Instruments',
+    type: 'soundfont',
+    note: 'E3',
+    color: '#fb8c00',
+    defaultGmId: 24, // Acoustic Guitar (nylon)
+    presets: [
+      { id: 'e3', name: 'Root E3', note: 'E3' },
+      { id: 'a3', name: 'Strum A3', note: 'A3' },
+      { id: 'd4', name: 'Lead D4', note: 'D4' },
+      { id: 'g3', name: 'Warm G3', note: 'G3' }
+    ]
+  },
+  {
+    id: 'sf_strings',
+    name: 'Orchestral Strings',
+    category: 'SoundFont Instruments',
+    type: 'soundfont',
+    note: 'G3',
+    color: '#ab47bc',
+    defaultGmId: 48, // String Ensemble 1
+    presets: [
+      { id: 'g3', name: 'Ensemble G3', note: 'G3' },
+      { id: 'c3', name: 'Deep C3', note: 'C3' },
+      { id: 'e4', name: 'Lush E4', note: 'E4' },
+      { id: 'a3', name: 'Airy A3', note: 'A3' }
+    ]
+  },
+  {
+    id: 'sf_brass',
+    name: 'Brass Section',
+    category: 'SoundFont Instruments',
+    type: 'soundfont',
+    note: 'C4',
+    color: '#ffd600',
+    defaultGmId: 61, // Brass Section
+    presets: [
+      { id: 'c4', name: 'Hit C4', note: 'C4' },
+      { id: 'f3', name: 'Low F3', note: 'F3' },
+      { id: 'g4', name: 'Fanfare G4', note: 'G4' },
+      { id: 'a#3', name: 'Stab A#3', note: 'A#3' }
+    ]
   }
 ];
 
@@ -311,6 +381,52 @@ export default function SequencerWorkstation() {
   // Master limiter ref for cleanup
   const limiterRef = useRef<Tone.Limiter | null>(null);
 
+  // Memoized GM instruments grouped by category for selection
+  const groupedGmInstruments = React.useMemo(() => getInstrumentsByCategory(), []);
+
+  // SoundFont General MIDI program selection per track: { [trackId]: gmInstrumentId (0-127) }
+  const [trackGmInstruments, setTrackGmInstruments] = useState<Record<string, number>>(() => {
+    const initial: Record<string, number> = {};
+    TRACK_DEFS.forEach(t => {
+      if (t.defaultGmId !== undefined) {
+        initial[t.id] = t.defaultGmId;
+      }
+    });
+    return initial;
+  });
+
+  const trackGmInstrumentsRef = useRef(trackGmInstruments);
+  useEffect(() => { trackGmInstrumentsRef.current = trackGmInstruments; }, [trackGmInstruments]);
+
+  // Loading indicator states for soundfont instruments: { [gmId]: 'loading' | 'loaded' | 'error' }
+  const [sfStatus, setSfStatus] = useState<Record<number, string>>({});
+
+  const soundFontPlayerRef = useRef<SoundFontPlayer | null>(null);
+
+  // Helper to ensure an instrument is loaded
+  const loadSoundFontInstrument = async (gmId: number) => {
+    const player = soundFontPlayerRef.current;
+    if (!player) return;
+    if (player.isLoaded(gmId)) return;
+    try {
+      setSfStatus(prev => ({ ...prev, [gmId]: 'loading' }));
+      await player.loadInstrument(gmId);
+      setSfStatus(prev => ({ ...prev, [gmId]: 'loaded' }));
+    } catch (e: any) {
+      setSfStatus(prev => ({ ...prev, [gmId]: 'error' }));
+    }
+  };
+
+  // Pre-load default instruments on initial mount once Audio is available
+  useEffect(() => {
+    if (soundFontPlayerRef.current) {
+      const defaultIds = [0, 24, 48, 61]; // Piano, Guitar, Strings, Brass
+      defaultIds.forEach(id => {
+        loadSoundFontInstrument(id);
+      });
+    }
+  }, []);
+
   const refreshStepColCache = () => {
     stepColCacheRef.current = Array.from({ length: DEFAULT_STEPS }, (_, i) => ({
       step: Array.from(document.querySelectorAll<HTMLElement>(`.step-col-${i}`))
@@ -353,6 +469,18 @@ export default function SequencerWorkstation() {
     // Master limiter prevents clipping when multiple voices play simultaneously
     const masterLimiter = new Tone.Limiter(-1).toDestination();
     limiterRef.current = masterLimiter;
+
+    // Initialize General MIDI SoundFont Player
+    const sfPlayer = new SoundFontPlayer(masterLimiter);
+    soundFontPlayerRef.current = sfPlayer;
+    sfPlayer.onStateChange = ({ instrumentId, state }) => {
+      setSfStatus(prev => ({ ...prev, [instrumentId]: state }));
+    };
+
+    // Preload default SoundFont instruments (Piano, Guitar, Strings, Brass)
+    [0, 24, 48, 61].forEach(id => {
+      sfPlayer.loadInstrument(id).catch(() => {});
+    });
 
     const kick = new Tone.MembraneSynth({
       pitchDecay: 0.05,
@@ -512,6 +640,8 @@ export default function SequencerWorkstation() {
       });
       try { limiterRef.current?.dispose(); } catch {}
       limiterRef.current = null;
+      try { soundFontPlayerRef.current?.dispose(); } catch {}
+      soundFontPlayerRef.current = null;
       stepColCacheRef.current = [];
     };
   }, []);
@@ -527,6 +657,21 @@ export default function SequencerWorkstation() {
       if (Tone.context.state !== 'running') {
         await Tone.start();
       }
+      if (trackDef.type === 'soundfont') {
+        const gmId = trackGmInstrumentsRef.current[trackDef.id] ?? trackDef.defaultGmId ?? 0;
+        const player = soundFontPlayerRef.current;
+        if (player) {
+          if (!player.isLoaded(gmId)) {
+            loadSoundFontInstrument(gmId).then(() => {
+              player.triggerNote(gmId, currentNote || 'C4', '8n');
+            });
+          } else {
+            player.triggerNote(gmId, currentNote || 'C4', '8n', triggerTime);
+          }
+        }
+        return;
+      }
+
       const inst = instrumentsRef.current[trackDef.id];
       if (!inst) return;
       const triggerTime = time !== undefined ? Math.max(time, Tone.now()) : Tone.now();
@@ -589,27 +734,38 @@ export default function SequencerWorkstation() {
           const track = TRACK_DEFS[i];
           if (activeSet.has(track.id)) {
             if (currentGrid[track.id]?.[step] || currentHolds[track.id]) {
-              const inst = instrumentsRef.current[track.id];
-              if (inst) {
-                try {
-                  const currentNote = getTrackActiveNote(track);
-                  if (track.type === 'membrane' || track.type === 'sub808' || track.type === 'tom') {
-                    inst.triggerAttackRelease(currentNote || 'C1', '8n', time);
-                  } else if (track.type === 'noise') {
-                    inst.triggerAttackRelease(currentNote || '16n', time);
-                  } else if (track.type === 'metal' || track.type === 'metal_open' || track.type === 'cowbell') {
-                    inst.triggerAttackRelease(currentNote || '32n', time);
-                  } else if (track.type === 'fm' || track.type === 'synth' || track.type === 'rim') {
-                    inst.triggerAttackRelease(currentNote || 'C3', '8n', time);
-                  } else if (track.type === 'acid' || track.type === 'wobble') {
-                    inst.triggerAttackRelease(currentNote || 'C2', '8n', time);
-                  } else if (track.type === 'pluck') {
-                    inst.triggerAttackRelease(currentNote || 'C4', '16n', time);
-                  } else if (track.type === 'poly' || track.type === 'am' || track.type === 'space') {
-                    inst.triggerAttackRelease(currentNote || 'C4', '8n', time);
+              if (track.type === 'soundfont') {
+                const gmId = trackGmInstrumentsRef.current[track.id] ?? track.defaultGmId ?? 0;
+                const player = soundFontPlayerRef.current;
+                if (player && player.isLoaded(gmId)) {
+                  try {
+                    const currentNote = getTrackActiveNote(track);
+                    player.triggerNote(gmId, currentNote || 'C4', '8n', time);
+                  } catch (err) {}
+                }
+              } else {
+                const inst = instrumentsRef.current[track.id];
+                if (inst) {
+                  try {
+                    const currentNote = getTrackActiveNote(track);
+                    if (track.type === 'membrane' || track.type === 'sub808' || track.type === 'tom') {
+                      inst.triggerAttackRelease(currentNote || 'C1', '8n', time);
+                    } else if (track.type === 'noise') {
+                      inst.triggerAttackRelease(currentNote || '16n', time);
+                    } else if (track.type === 'metal' || track.type === 'metal_open' || track.type === 'cowbell') {
+                      inst.triggerAttackRelease(currentNote || '32n', time);
+                    } else if (track.type === 'fm' || track.type === 'synth' || track.type === 'rim') {
+                      inst.triggerAttackRelease(currentNote || 'C3', '8n', time);
+                    } else if (track.type === 'acid' || track.type === 'wobble') {
+                      inst.triggerAttackRelease(currentNote || 'C2', '8n', time);
+                    } else if (track.type === 'pluck') {
+                      inst.triggerAttackRelease(currentNote || 'C4', '16n', time);
+                    } else if (track.type === 'poly' || track.type === 'am' || track.type === 'space') {
+                      inst.triggerAttackRelease(currentNote || 'C4', '8n', time);
+                    }
+                  } catch (err) {
+                    // Catch any timing collision silently
                   }
-                } catch (err) {
-                  // Catch any timing collision silently
                 }
               }
             }
@@ -723,7 +879,15 @@ export default function SequencerWorkstation() {
         const isHeld = holdTones[track.id];
         const midiTrack = midi.addTrack();
         const activePreset = trackPresets[track.id] || track.presets[0]?.id;
-        midiTrack.name = `${track.name} (${activePreset})`;
+        
+        if (track.type === 'soundfont') {
+          const gmId = trackGmInstruments[track.id] ?? track.defaultGmId ?? 0;
+          const gmInst = GM_INSTRUMENTS[gmId];
+          midiTrack.name = gmInst ? `${gmInst.name} (${activePreset})` : `${track.name} (${activePreset})`;
+          midiTrack.instrument.number = gmId;
+        } else {
+          midiTrack.name = `${track.name} (${activePreset})`;
+        }
 
         const midiPitch = getMidiPitchForTrack(track);
 
@@ -776,6 +940,7 @@ export default function SequencerWorkstation() {
         bpm,
         grid,
         trackPresets,
+        trackGmInstruments,
         selectedTracks,
         holdTones,
         removedTracks,
@@ -818,6 +983,7 @@ export default function SequencerWorkstation() {
           if (typeof data.bpm === 'number') setBpm(data.bpm);
           if (data.grid) setGrid(data.grid);
           if (data.trackPresets) setTrackPresets(data.trackPresets);
+          if (data.trackGmInstruments) setTrackGmInstruments(data.trackGmInstruments);
           if (data.selectedTracks) setSelectedTracks(data.selectedTracks);
           if (data.holdTones) setHoldTones(data.holdTones);
           if (data.removedTracks) setRemovedTracks(data.removedTracks);
@@ -871,15 +1037,22 @@ export default function SequencerWorkstation() {
       }
 
       const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
+      const updatedGmMap = { ...trackGmInstrumentsRef.current };
 
       instrumentTracks.forEach((t, i) => {
         const assignedTrackDef = TRACK_DEFS[i % TRACK_DEFS.length];
+        if (assignedTrackDef.type === 'soundfont' && typeof t.instrument?.number === 'number') {
+          const gmProg = Math.max(0, Math.min(127, t.instrument.number));
+          updatedGmMap[assignedTrackDef.id] = gmProg;
+          loadSoundFontInstrument(gmProg);
+        }
         t.notes.forEach(n => {
           const stepIndex = Math.round(n.ticks / ticksPer16th) % DEFAULT_STEPS;
           newGrid[assignedTrackDef.id][stepIndex] = true;
         });
       });
 
+      setTrackGmInstruments(updatedGmMap);
       setGrid(newGrid);
 
       // Show toast — auto-dismiss after 3 s
@@ -956,7 +1129,7 @@ export default function SequencerWorkstation() {
             })()}
           </h1>
           <p style={{ margin: '4px 0 0', color: '#90a4ae', fontSize: 13 }}>
-            Tone.js Audio Synthesis • Multi-layer Looper • MIDI File Exporter & Importer
+            Tone.js Synths + 128 General MIDI SoundFont Instruments • Multi-layer Looper • MIDI Exporter & Importer
           </p>
         </div>
 
@@ -1095,11 +1268,11 @@ export default function SequencerWorkstation() {
 
       {/* Sequencer Grid */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, backgroundColor: '#131620', padding: 16, borderRadius: 10 }}>
-        {(['Drums', 'Bass', 'Synth'] as const).map(category => {
+        {(['Drums', 'Bass', 'Synth', 'SoundFont Instruments'] as const).map(category => {
           const categoryTracks = TRACK_DEFS.filter(t => t.category === category);
           const isCollapsed = !!collapsedCategories[category];
           const activeCategoryTracks = categoryTracks.filter(t => !removedTracks[t.id]);
-          const catColor = category === 'Drums' ? '#ff9100' : category === 'Bass' ? '#00e676' : '#00e5ff';
+          const catColor = category === 'Drums' ? '#ff9100' : category === 'Bass' ? '#00e676' : category === 'Synth' ? '#00e5ff' : '#f9a825';
 
           return (
             <div key={category} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1143,7 +1316,7 @@ export default function SequencerWorkstation() {
                     key={track.id}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '170px 72px repeat(16, 1fr)',
+                      gridTemplateColumns: '200px 72px repeat(16, 1fr)',
                       gap: 6,
                       alignItems: 'center',
                       opacity: isSelected ? 1 : 0.4,
@@ -1192,29 +1365,128 @@ export default function SequencerWorkstation() {
                         >
                           {track.name}
                         </button>
-                        {/* Sound Variant Dropdown */}
-                        <select
-                          value={activePreset}
-                          onChange={e => setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value }))}
-                          style={{
-                            background: '#131722',
-                            color: track.color,
-                            border: '1px solid #2e384d',
-                            borderRadius: 3,
-                            fontSize: 10,
-                            padding: '1px 3px',
-                            marginTop: 2,
-                            cursor: 'pointer',
-                            outline: 'none'
-                          }}
-                          title="Change sound timbre / pitch preset"
-                        >
-                          {track.presets.map(p => (
-                            <option key={p.id} value={p.id} style={{ background: '#171b26', color: '#fff' }}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
+                        {track.type === 'soundfont' ? (
+                          <div style={{ display: 'flex', gap: 4, marginTop: 2, alignItems: 'center' }}>
+                            {/* 128 GM Instrument Picker organized by Category */}
+                            <select
+                              value={trackGmInstruments[track.id] ?? track.defaultGmId ?? 0}
+                              onChange={async (e) => {
+                                const newGmId = Number(e.target.value);
+                                setTrackGmInstruments(prev => ({ ...prev, [track.id]: newGmId }));
+                                await loadSoundFontInstrument(newGmId);
+                                const currentNote = getTrackActiveNote(track);
+                                soundFontPlayerRef.current?.triggerNote(newGmId, currentNote || 'C4', '8n');
+                              }}
+                              style={{
+                                background: '#131722',
+                                color: track.color,
+                                border: '1px solid #2e384d',
+                                borderRadius: 3,
+                                fontSize: 10,
+                                padding: '1px 3px',
+                                cursor: 'pointer',
+                                outline: 'none',
+                                flex: 1,
+                                minWidth: 0,
+                                textOverflow: 'ellipsis'
+                              }}
+                              title="Select any of the 128 General MIDI instruments"
+                            >
+                              {Object.entries(groupedGmInstruments).map(([cat, insts]) => (
+                                <optgroup key={cat} label={cat} style={{ background: '#171b26', color: '#00e5ff', fontWeight: 'bold' }}>
+                                  {insts.map(inst => (
+                                    <option key={inst.id} value={inst.id} style={{ background: '#171b26', color: '#fff' }}>
+                                      {inst.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ))}
+                            </select>
+
+                            {/* Pitch / Octave Note selector */}
+                            <select
+                              value={activePreset}
+                              onChange={e => setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value }))}
+                              style={{
+                                background: '#131722',
+                                color: '#b0bec5',
+                                border: '1px solid #2e384d',
+                                borderRadius: 3,
+                                fontSize: 9,
+                                padding: '1px 2px',
+                                cursor: 'pointer',
+                                outline: 'none',
+                                flexShrink: 0
+                              }}
+                              title="Select base pitch octave"
+                            >
+                              {track.presets.map(p => (
+                                <option key={p.id} value={p.id} style={{ background: '#171b26', color: '#fff' }}>
+                                  {p.note || p.name}
+                                </option>
+                              ))}
+                            </select>
+
+                            {/* Loading / Ready status badge */}
+                            {(() => {
+                              const currentGm = trackGmInstruments[track.id] ?? track.defaultGmId ?? 0;
+                              const status = sfStatus[currentGm] || (soundFontPlayerRef.current?.isLoaded(currentGm) ? 'loaded' : 'idle');
+                              if (status === 'loading') {
+                                return (
+                                  <span
+                                    title="Downloading high-quality SoundFont samples..."
+                                    style={{
+                                      fontSize: 9,
+                                      color: '#ffd600',
+                                      padding: '1px 3px',
+                                      borderRadius: 2,
+                                      background: '#ffd60022',
+                                      animation: 'pulse 1s infinite'
+                                    }}
+                                  >
+                                    ⏳
+                                  </span>
+                                );
+                              }
+                              return (
+                                <span
+                                  title="SoundFont sampler ready"
+                                  style={{
+                                    fontSize: 8,
+                                    color: '#00e676',
+                                    fontWeight: 700
+                                  }}
+                                >
+                                  HD
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          /* Sound Variant Dropdown for Standard Synth tracks */
+                          <select
+                            value={activePreset}
+                            onChange={e => setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value }))}
+                            style={{
+                              background: '#131722',
+                              color: track.color,
+                              border: '1px solid #2e384d',
+                              borderRadius: 3,
+                              fontSize: 10,
+                              padding: '1px 3px',
+                              marginTop: 2,
+                              cursor: 'pointer',
+                              outline: 'none'
+                            }}
+                            title="Change sound timbre / pitch preset"
+                          >
+                            {track.presets.map(p => (
+                              <option key={p.id} value={p.id} style={{ background: '#171b26', color: '#fff' }}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </div>
 
                       {/* Remove Track Line Button */}
@@ -1294,7 +1566,7 @@ export default function SequencerWorkstation() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '170px 72px repeat(16, 1fr)',
+          gridTemplateColumns: '200px 72px repeat(16, 1fr)',
           gap: 6,
           marginTop: 8,
           padding: '0 16px',
