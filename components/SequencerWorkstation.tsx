@@ -531,8 +531,13 @@ export default function SequencerWorkstation() {
         newGrid[t.id] = Array(DEFAULT_STEPS).fill(false);
       });
 
-      imported.tracks.forEach((t, i) => {
-        if (t.notes.length === 0) return; // skip empty/meta tracks
+      // Filter out meta/tempo tracks (0 notes) BEFORE indexing,
+      // so the slot counter i is never thrown off by skipped tracks.
+      // Your stress test has 1 empty tempo track + 16 instrument tracks —
+      // without this filter every track would be shifted one slot to the right.
+      const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
+
+      instrumentTracks.forEach((t, i) => {
         const assignedTrackDef = TRACK_DEFS[i % TRACK_DEFS.length];
         t.notes.forEach(n => {
           // Use integer ticks — no floating point rounding error
