@@ -185,6 +185,7 @@ export default function SequencerWorkstation() {
     bass.volume.value = -3;
 
     const acidBass = new Tone.PolySynth(Tone.MonoSynth, {
+      maxPolyphony: 4,
       oscillator: { type: 'sawtooth' },
       filter: { Q: 6, type: 'lowpass' },
       envelope: { attack: 0.01, decay: 0.18, sustain: 0.2, release: 0.2 },
@@ -193,18 +194,21 @@ export default function SequencerWorkstation() {
     acidBass.volume.value = -3;
 
     const synthLead = new Tone.PolySynth(Tone.Synth, {
+      maxPolyphony: 4,
       oscillator: { type: 'sawtooth' },
       envelope: { attack: 0.02, decay: 0.15, sustain: 0.2, release: 0.3 }
     }).connect(masterLimiter);
     synthLead.volume.value = -6;
 
     const pluck = new Tone.PolySynth(Tone.Synth, {
+      maxPolyphony: 4,
       oscillator: { type: 'triangle' },
       envelope: { attack: 0.005, decay: 0.12, sustain: 0, release: 0.1 }
     }).connect(masterLimiter);
     pluck.volume.value = -3;
 
     const chordPad = new Tone.PolySynth(Tone.AMSynth, {
+      maxPolyphony: 4,
       harmonicity: 2,
       oscillator: { type: 'sine' },
       envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 0.4 }
@@ -212,6 +216,7 @@ export default function SequencerWorkstation() {
     chordPad.volume.value = -6;
 
     const spacePad = new Tone.PolySynth(Tone.FMSynth, {
+      maxPolyphony: 4,
       harmonicity: 3,
       modulationIndex: 10,
       oscillator: { type: 'triangle' },
@@ -220,6 +225,7 @@ export default function SequencerWorkstation() {
     spacePad.volume.value = -8;
 
     const wobble = new Tone.PolySynth(Tone.MonoSynth, {
+      maxPolyphony: 4,
       oscillator: { type: 'square' },
       filter: { Q: 4, type: 'lowpass' },
       envelope: { attack: 0.03, decay: 0.18, sustain: 0.4, release: 0.25 },
