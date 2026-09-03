@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='UTF-8'>
+  <title>Drumpad Synth (MIDI)</title>
+  <style>
+    body {font-family:Arial,sans-serif;background:#000;color:#eee;margin:0;padding:20px;}
+    h1{color:#0f0;}
+    .grid{display:grid;grid-template-columns:repeat(16,30px);gap:4px;margin:20px auto;width:max-content;}
+    .pad{width:30px;height:30px;background:#444;border-radius:4px;cursor:pointer;}
+    .pad.active{background:#0f0;}
+    .controls{margin-top:20px;}
+    button{padding:8px 12px;margin:0 6px;font-size:14px;}
+    .track-list{margin-top:10px;}
+    .track-list label{margin-right:12px;}
+  </style>
+  <script src='https://unpkg.com/react@18/umd/react.production.min.js'></script>
+  <script src='https://unpkg.com/react-dom@18/umd/react-dom.production.min.js'></script>
+  <script src='https://unpkg.com/@tonejs/tone@14.8.39/build/Tone.min.js'></script>
+  <script src='https://unpkg.com/midi-writer-js@2.0.5/build/MidiWriter.js'></script>
+  <script src='https://unpkg.com/midi-parser-js@latest/build/MidiParser.js'></script>
+  <script src='https://unpkg.com/@babel/standalone/babel.min.js'></script>
+</head>
+<body>
+  <h1>Drumpad Synth (MIDI)</h1>
+  <div id='root'></div>
+  <script type='text/babel'>
+    const {useState,useEffect,useRef}=React;
+
+    const App=()=>{
+      const [midiData,setMidiData]=useState(null); // raw parsed object
+      const [selectedPitches,setSelectedPitches]=useState([]); // array of pitch strings like 'C4'
+      const [playing,setPlaying]=useState(false);
+      const partRef=useRef(null);
+
+      // Load MIDI file
+      const handleFile=(e)=>{
+        const file=e.target.files[0];
+        if(!file) return;
+        const reader=new FileReader();
+        reader.onload=ev=>{
+          const arrayBuffer=ev.target.result;
+          // MidiParser expects base64 string
+          const base64=btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+          const parsed=MidiParser.parse(base64);
+          setMidiData(parsed);
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      // Extract unique pitches from parsed data
+      useEffect(()=>{
+        if(!midiData) return;
+        const pitches=new Set();
+        midiData.tracks.forEach(track=>{
+          track.events.forEach(ev=>{
+            if(ev.type==='noteOn') pitches.add(ev.noteName);
+          });
+        });
+        setSelectedPitches(Array.from(pitches));
+      },[midiData]);
+
+      const togglePitch=(pitch)=>{
+        setSelectedPitches(prev=>prev.includes(pitch)?prev.filter(p=>p!==pitch):[...prev,pitch]);
+      };
+
+      const startPlayback=async()=>{
+        await Tone.start();
+        if(!midiData) return;
+        // Build Tone.Part with noteOn events filtered by selected pitches
+        const notes=[];
+        midiData.tracks.forEach(track=>{
+          track.events.forEach(ev=>{
+            if(ev.type==='noteOn' && selectedPitches.includes(ev.noteName)){
+              const time=ev.deltaTime/1000; // simplistic conversion (ticks ? seconds); adjust as needed
+              notes.push({time, pitch:ev.noteName, velocity:ev.velocity||0.8});
+            }
+          });
+        });
+        const synth=new Tone.PolySynth(Tone.Synth).toDestination();
+        const part=new Tone.Part((time, note)=>{
+          synth.triggerAttackRelease(note.pitch, '8n', time, note.velocity);
+        }, notes.map(n=>[n.time, n]));
+        part.loop=true;
+        part.loopEnd='4m'; // 4 measures loop
+        part.start(0);
+        Tone.Transport.bpm.value=120;
+        Tone.Transport.start();
+        partRef.current=part;
+        setPlaying(true);
+      };
+
+      const stopPlayback=()=>{
+        Tone.Transport.stop();
+        partRef.current && partRef.current.dispose();
+        setPlaying(false);
+      };
+
+      const exportMIDI=()=>{
+        if(!midiData) return;
+        const track=new MidiWriter.Track();
+        track.setTempo(120);
+        const ticksPerStep=128;
+        midiData.tracks.forEach(t=>{
+          t.events.forEach(ev=>{
+            if(ev.type==='noteOn' && selectedPitches.includes(ev.noteName)){
+              const noteEvent=new MidiWriter.NoteEvent({
+                pitch:[ev.noteName],
+                duration:'T'+ticksPerStep,
+                startTick:ev.deltaTime // using original delta as tick offset (approx.)
+              });
+              track.addEvent(noteEvent);
+            }
+          });
+        });
+        const writer=new MidiWriter.Writer([track]);
+        const blob=new Blob([writer.buildFile()],{type:'audio/midi'});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        a.href=url;
+        a.download='drumpad_export.mid';
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return(
+        <div>
+          <input type='file' accept='.mid,.midi' onChange={handleFile} />
+          {selectedPitches.length>0 && (
+            <div className='track-list'>
+              <strong>Select pitches to play:</strong><br/>
+              {selectedPitches.map(p=> (
+                <label key={p}>
+                  <input type='checkbox' checked={selectedPitches.includes(p)} onChange={()=>togglePitch(p)} /> {p}
+                </label>
+              ))}
+            </div>
+          )}
+          <div className='controls'>
+            {!playing && <button onClick={startPlayback}>Start Loop</button>}
+            {playing && <button onClick={stopPlayback}>Stop</button>}
+            <button onClick={exportMIDI}>Export MIDI</button>
+          </div>
+        </div>
+      );
+    };
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>

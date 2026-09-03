@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Drumpad Synth</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background:#000; color:#eee; margin:0; padding:0; }
+    h1 { margin-top:20px; }
+    .grid { display: grid; grid-template-columns: repeat(16, 30px); gap:4px; margin:20px auto; width:max-content; }
+    .pad { width:30px; height:30px; background:#333; border-radius:4px; cursor:pointer; }
+    .pad.active { background:#0f0; }
+    .controls { margin-top:20px; }
+    button { padding:8px 16px; margin:0 8px; font-size:14px; background:#555; color:#eee; border:none; border-radius:4px; cursor:pointer; }
+    button:hover { background:#777; }
+  </style>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@tonejs/tone@14.8.39/build/Tone.min.js"></script>
+  <script src="https://unpkg.com/midi-writer-js@2.0.5/build/MidiWriter.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <h1>Drumpad Synth</h1>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef } = React;
+
+    // Simple synths for each drum sound (replace with samples if desired)
+    const synths = [
+      new Tone.MembraneSynth().toDestination(), // kick
+      new Tone.NoiseSynth({ envelope: { attack: 0.001, decay: 0.2 } }).toDestination(), // snare
+      new Tone.MetalSynth({ frequency: 200 }).toDestination(), // hi‑hat
+      new Tone.Synth().toDestination() // clap
+    ];
+    const synthNames = ['Kick', 'Snare', 'Hi‑Hat', 'Clap'];
+
+    const App = () => {
+      const STEPS = 16;
+      const TRACKS = synths.length;
+      const [pattern, setPattern] = useState(
+        Array.from({ length: TRACKS }, () => Array(STEPS).fill(false))
+      );
+      const [playing, setPlaying] = useState(false);
+      const stepRef = useRef(0);
+      const loopRef = useRef(null);
+
+      const togglePad = (track, step) => {
+        setPattern(p => {
+          const copy = p.map(r => r.slice());
+          copy[track][step] = !copy[track][step];
+          return copy;
+        });
+      };
+
+      const startLoop = async () => {
+        await Tone.start();
+        setPlaying(true);
+        stepRef.current = 0;
+        loopRef.current = new Tone.Transport.scheduleRepeat(time => {
+          const cur = stepRef.current;
+          pattern.forEach((row, t) => {
+            if (row[cur]) {
+              // Trigger each synth with a simple pitch mapping
+              if (t === 0) synths[t].triggerAttackRelease('C2', '8n', time);
+              if (t === 1) synths[t].triggerAttackRelease('G4', '8n', time);
+              if (t === 2) synths[t].triggerAttackRelease('D5', '16n', time);
+              if (t === 3) synths[t].triggerAttackRelease('E4', '8n', time);
+            }
+          });
+          stepRef.current = (cur + 1) % STEPS;
+        }, '0.5s'); // 120 BPM => half‑second per step
+        Tone.Transport.start();
+      };
+
+      const stopLoop = () => {
+        Tone.Transport.stop();
+        Tone.Transport.cancel();
+        setPlaying(false);
+      };
+
+      const exportMIDI = () => {
+        const track = new MidiWriter.Track();
+        track.setTempo(120);
+        const ticksPerStep = 128;
+        pattern.forEach((row, t) => {
+          row.forEach((on, s) => {
+            if (on) {
+              const pitchMap = { Kick: 'C2', Snare: 'G4', 'Hi‑Hat': 'D5', Clap: 'E4' };
+              const note = new MidiWriter.NoteEvent({
+                pitch: [pitchMap[synthNames[t]]],
+                duration: 'T' + ticksPerStep,
+                startTick: s * ticksPerStep
+              });
+              track.addEvent(note);
+            }
+          });
+        });
+        const writer = new MidiWriter.Writer([track]);
+        const blob = new Blob([writer.buildFile()], { type: 'audio/midi' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'drumpad_pattern.mid';
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return (
+        <div>
+          <div className="grid">
+            {Array.from({ length: TRACKS }).map((_, t) =>
+              Array.from({ length: STEPS }).map((_, s) => (
+                <div
+                  key={`${t}-${s}`}
+                  className={`pad ${pattern[t][s] ? 'active' : ''}`}
+                  onClick={() => togglePad(t, s)}
+                />
+              ))
+            )}
+          </div>
+          <div className="controls">
+            {!playing && <button onClick={startLoop}>Start</button>}
+            {playing && <button onClick={stopLoop}>Stop</button>}
+            <button onClick={exportMIDI}>Export MIDI</button>
+          </div>
+          <p><strong>Rows (top → bottom):</strong> Kick | Snare | Hi‑Hat | Clap</p>
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
