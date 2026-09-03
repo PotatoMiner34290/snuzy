@@ -185,52 +185,52 @@ export default function SequencerWorkstation() {
     bass.volume.value = -3;
 
     const acidBass = new Tone.PolySynth(Tone.MonoSynth, {
-      maxPolyphony: 8,
       oscillator: { type: 'sawtooth' },
       filter: { Q: 6, type: 'lowpass' },
       envelope: { attack: 0.01, decay: 0.18, sustain: 0.2, release: 0.2 },
       filterEnvelope: { attack: 0.02, decay: 0.12, sustain: 0.1, release: 0.15, baseFrequency: 80, octaves: 4 }
     }).connect(masterLimiter);
+    acidBass.maxPolyphony = 8;
     acidBass.volume.value = -3;
 
     const synthLead = new Tone.PolySynth(Tone.Synth, {
-      maxPolyphony: 8,
       oscillator: { type: 'sawtooth' },
       envelope: { attack: 0.02, decay: 0.15, sustain: 0.2, release: 0.3 }
     }).connect(masterLimiter);
+    synthLead.maxPolyphony = 8;
     synthLead.volume.value = -6;
 
     const pluck = new Tone.PolySynth(Tone.Synth, {
-      maxPolyphony: 8,
       oscillator: { type: 'triangle' },
       envelope: { attack: 0.005, decay: 0.12, sustain: 0, release: 0.1 }
     }).connect(masterLimiter);
+    pluck.maxPolyphony = 8;
     pluck.volume.value = -3;
 
     const chordPad = new Tone.PolySynth(Tone.AMSynth, {
-      maxPolyphony: 8,
       harmonicity: 2,
       oscillator: { type: 'sine' },
       envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 0.4 }
     }).connect(masterLimiter);
+    chordPad.maxPolyphony = 8;
     chordPad.volume.value = -6;
 
     const spacePad = new Tone.PolySynth(Tone.FMSynth, {
-      maxPolyphony: 8,
       harmonicity: 3,
       modulationIndex: 10,
       oscillator: { type: 'triangle' },
       envelope: { attack: 0.1, decay: 0.35, sustain: 0.5, release: 0.5 }
     }).connect(masterLimiter);
+    spacePad.maxPolyphony = 8;
     spacePad.volume.value = -8;
 
     const wobble = new Tone.PolySynth(Tone.MonoSynth, {
-      maxPolyphony: 8,
       oscillator: { type: 'square' },
       filter: { Q: 4, type: 'lowpass' },
       envelope: { attack: 0.03, decay: 0.18, sustain: 0.4, release: 0.25 },
       filterEnvelope: { attack: 0.08, decay: 0.15, sustain: 0.2, release: 0.2, baseFrequency: 120, octaves: 3 }
     }).connect(masterLimiter);
+    wobble.maxPolyphony = 8;
     wobble.volume.value = -4;
 
     instrumentsRef.current = {
