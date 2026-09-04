@@ -266,6 +266,49 @@ button:active {
   }
 }
 
+/* Arrangement and piano roll */
+.view-switcher { display: flex; gap: 4px; margin: 0 0 8px; }
+.view-switcher button { padding: 9px 14px; border: 1px solid #30394d; border-radius: 7px 7px 3px 3px; background: #171c29; color: #8290a5; cursor: pointer; font-weight: 750; }
+.view-switcher button.active { border-color: #00c8df; background: #15303a; color: #6eeeff; box-shadow: inset 0 -2px #00c8df; }
+.arrangement-workspace { border: 1px solid #293145; border-radius: 6px 10px 10px 10px; overflow: hidden; background: #10131c; }
+.arrangement-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #293145; background: linear-gradient(135deg, #1b2231, #121722); }
+.arrangement-heading > div { display: flex; gap: 10px; align-items: baseline; }
+.arrangement-heading span { color: #8290a5; font-size: 11px; }
+.arrangement-hint { color: #00b8cc !important; }
+.arrangement-scroll { max-height: 52vh; overflow: auto; scrollbar-color: #00a8bb #171c29; }
+.arrangement-canvas { position: relative; min-width: 100%; background: repeating-linear-gradient(to right, transparent 0, transparent calc((100% - 180px) / 16 - 1px), #30384a calc((100% - 180px) / 16)); }
+.arrangement-ruler { position: sticky; top: 0; z-index: 8; display: grid; min-height: 30px; background: #171c28; }
+.arrangement-ruler > div { padding: 8px 7px; border-right: 1px solid #374156; color: #738096; font-size: 9px; font-weight: 800; }
+.arrangement-lane { display: grid; grid-template-columns: 180px 1fr; min-height: 58px; border-top: 1px solid #242b3b; }
+.lane-label { position: sticky; left: 0; z-index: 6; display: flex; align-items: center; justify-content: space-between; gap: 5px; min-width: 0; padding: 8px 9px; border-left: 4px solid transparent; border-right: 1px solid #364055; background: #1a2030; color: #dbe2e9; font-size: 11px; font-weight: 700; }
+.lane-label span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lane-label button { display: grid; place-items: center; flex: 0 0 auto; width: 25px; height: 25px; padding: 0; border: 1px solid #3b475d; border-radius: 4px; background: #252e40; color: #00d9ef; cursor: pointer; }
+.lane-content { position: relative; overflow: hidden; background: repeating-linear-gradient(to right, #151a26 0, #151a26 calc(6.25% - 1px), #31394b 6.25%); }
+.instrument-clip { position: absolute; top: 7px; bottom: 7px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; overflow: hidden; min-width: 20px; padding: 4px 7px; border: 1px solid #ffffff45; border-radius: 5px; color: #081015; cursor: pointer; text-align: left; opacity: .88; }
+.instrument-clip:hover, .instrument-clip.selected { filter: brightness(1.15); opacity: 1; transform: none; }
+.instrument-clip.selected { outline: 2px solid #fff; outline-offset: 1px; }
+.instrument-clip strong, .instrument-clip small { overflow: hidden; width: 100%; white-space: nowrap; text-overflow: ellipsis; }
+.instrument-clip strong { font-size: 10px; }
+.instrument-clip small { font-size: 8px; opacity: .72; }
+.lane-add { position: absolute; right: 8px; top: 16px; display: flex; align-items: center; gap: 3px; padding: 4px 6px; border: 1px dashed #465268; border-radius: 4px; background: #161c29cc; color: #75849b; cursor: pointer; font-size: 9px; }
+.arrangement-playhead { position: absolute; z-index: 9; top: 30px; bottom: 0; left: 180px; width: 2px; pointer-events: none; background: #fff; box-shadow: 0 0 8px #fff; }
+.piano-roll-panel { border-top: 1px solid #344057; background: #111621; }
+.piano-roll-toolbar { display: flex; align-items: center; gap: 9px; padding: 9px 12px; background: #1b2230; color: #9ba8ba; font-size: 10px; }
+.piano-roll-toolbar > div { display: flex; flex-direction: column; margin-right: auto; }
+.piano-roll-toolbar input, .piano-roll-toolbar select { max-width: 130px; border: 1px solid #3a465c; border-radius: 4px; background: #111722; color: #dce4eb; padding: 4px 6px; }
+.piano-roll-toolbar label { display: flex; align-items: center; gap: 4px; }
+.piano-roll-toolbar button { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border: 1px solid #3c485c; border-radius: 4px; background: #283247; color: #dce4eb; cursor: pointer; }
+.piano-roll-toolbar button.danger { color: #ff8d8d; }
+.piano-roll-scroll { max-height: 390px; overflow: auto; scrollbar-color: #00a8bb #171c29; }
+.piano-roll { display: grid; width: max-content; min-width: 100%; }
+.piano-key { position: sticky; left: 0; z-index: 4; height: 24px; padding: 5px 7px; border-right: 1px solid #4a556c; border-bottom: 1px solid #333c4e; background: #dce2e7; color: #19202a; font-size: 9px; font-weight: 800; }
+.piano-key.black { background: #252c39; color: #d2d9e0; }
+.piano-cell { position: relative; height: 24px; padding: 0; border: 0; border-right: 1px solid #242c3c; border-bottom: 1px solid #242c3c; background: #151b28; cursor: crosshair; }
+.piano-cell.beat { border-left: 1px solid #455168; }
+.piano-cell:hover { z-index: 2; background: #26354b; transform: none; }
+.piano-cell.has-note > span { position: absolute; z-index: 3; inset: 3px auto 3px 1px; min-width: 24px; border-radius: 3px; background: linear-gradient(90deg, #00c9df, #6ef4c5); box-shadow: 0 0 6px #00d9ef55; pointer-events: none; }
+@media (max-width: 760px) { .arrangement-heading, .piano-roll-toolbar { align-items: flex-start; flex-wrap: wrap; } .arrangement-hint { display: none; } }
+
 /* Input range slider transition */
 input[type="range"] {
   transition: opacity 0.2s ease, filter 0.2s ease;

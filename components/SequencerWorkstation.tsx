@@ -8,6 +8,7 @@ import {
   getInstrumentsByCategory,
   SoundFontPlayer
 } from './SoundFontEngine';
+import ArrangementView, { type InstrumentClip } from './ArrangementView';
 
 export interface SoundPreset {
   id: string;
@@ -361,6 +362,12 @@ export default function SequencerWorkstation() {
   const [stepCount, setStepCount] = useState<number>(DEFAULT_STEPS);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [autoFollow, setAutoFollow] = useState<boolean>(true);
+  const [activeView, setActiveView] = useState<'arrangement' | 'steps'>('arrangement');
+  const [arrangementClips, setArrangementClips] = useState<InstrumentClip[]>([
+    { id: 'starter_drums', trackId: 'kick', name: 'Drum foundation', start: 0, length: 16, notes: [{ id: 'n1', pitch: 36, start: 0, duration: 1, velocity: 110 }, { id: 'n2', pitch: 36, start: 8, duration: 1, velocity: 110 }] },
+    { id: 'starter_bass', trackId: 'bass', name: 'Bass idea', start: 0, length: 16, notes: [{ id: 'n3', pitch: 36, start: 0, duration: 4, velocity: 100 }, { id: 'n4', pitch: 43, start: 8, duration: 4, velocity: 96 }] },
+    { id: 'starter_lead', trackId: 'synth_lead', name: 'Lead idea', start: 0, length: 16, notes: [{ id: 'n5', pitch: 60, start: 0, duration: 2, velocity: 100 }, { id: 'n6', pitch: 64, start: 4, duration: 2, velocity: 100 }, { id: 'n7', pitch: 67, start: 8, duration: 4, velocity: 105 }] }
+  ]);
   const [tracks, setTracks] = useState<TrackDef[]>(() => TRACK_DEFS.map(t => ({ ...t, presets: [...t.presets] })));
   const [selectedTracks, setSelectedTracks] = useState<string[]>(TRACK_DEFS.map(t => t.id));
   const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
@@ -432,6 +439,8 @@ export default function SequencerWorkstation() {
   const stepColCacheRef = useRef<Array<{ step: HTMLElement[] }>>([]);
   const gridScrollRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(autoFollow);
+  const arrangementClipsRef = useRef(arrangementClips);
+  const activeViewRef = useRef(activeView);
   const selectedTracksSetRef = useRef<Set<string>>(new Set(selectedTracks));
   const limiterRef = useRef<Tone.Limiter | null>(null);
 
@@ -482,6 +491,8 @@ export default function SequencerWorkstation() {
   useEffect(() => { soloTracksRef.current = soloTracks; }, [soloTracks]);
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
   useEffect(() => { autoFollowRef.current = autoFollow; }, [autoFollow]);
+  useEffect(() => { arrangementClipsRef.current = arrangementClips; }, [arrangementClips]);
+  useEffect(() => { activeViewRef.current = activeView; }, [activeView]);
   useEffect(() => {
     selectedTracksRef.current = selectedTracks;
     selectedTracksSetRef.current = new Set(selectedTracks);
@@ -791,7 +802,7 @@ export default function SequencerWorkstation() {
         const currentHolds = holdTonesRef.current;
         const currentTracks = tracksRef.current;
 
-        for (let i = 0; i < currentTracks.length; i++) {
+        for (let i = 0; activeViewRef.current === 'steps' && i < currentTracks.length; i++) {
           const track = currentTracks[i];
           if (!channelAudible(track.id)) continue;
           if (!(currentGrid[track.id]?.[step] || currentHolds[track.id])) continue;
@@ -814,7 +825,35 @@ export default function SequencerWorkstation() {
           }
         }
 
+        if (activeViewRef.current === 'arrangement') {
+          arrangementClipsRef.current.forEach(clip => {
+            const localStep = step - clip.start;
+            if (localStep < 0 || localStep >= clip.length || !channelAudible(clip.trackId)) return;
+            const track = currentTracks.find(item => item.id === clip.trackId);
+            if (!track) return;
+            clip.notes.filter(note => note.start === localStep).forEach(note => {
+              const noteName = midiNoteName(note.pitch);
+              const velocity = note.velocity / 127;
+              const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
+              try {
+                if (usesSoundFont(track)) {
+                  const gmId = trackGmInstrumentsRef.current[track.id] ?? defaultGmForTrack(track);
+                  const player = soundFontPlayerRef.current;
+                  if (player?.isLoaded(gmId)) player.triggerNote(gmId, noteName, duration, time, velocity);
+                } else {
+                  fireSynth(track, noteName, time, velocity);
+                }
+              } catch {}
+            });
+          });
+        }
+
         Tone.Draw.schedule(() => {
+          const playhead = document.querySelector<HTMLElement>('[data-arrangement-playhead]');
+          const canvas = playhead?.parentElement;
+          if (playhead && canvas) {
+            playhead.style.left = `${180 + (step / steps) * (canvas.clientWidth - 180)}px`;
+          }
           let cache = stepColCacheRef.current;
           if (cache.length === 0) {
             refreshStepColCache();
@@ -959,6 +998,7 @@ export default function SequencerWorkstation() {
     if (tracks.length <= 1) return;
     setTracks(prev => prev.filter(t => t.id !== trackId));
     setSelectedTracks(prev => prev.filter(id => id !== trackId));
+    setArrangementClips(prev => prev.filter(clip => clip.trackId !== trackId));
     setGrid(prev => {
       const next = { ...prev };
       delete next[trackId];
@@ -1054,6 +1094,7 @@ export default function SequencerWorkstation() {
       let notesAdded = 0;
 
       tracks.forEach((track, channelIndex) => {
+        if (activeView === 'arrangement') return;
         if (!selectedTracks.includes(track.id)) return;
         if (mutedTracks[track.id]) return;
 
@@ -1084,6 +1125,27 @@ export default function SequencerWorkstation() {
         }
       });
 
+      if (activeView === 'arrangement') {
+        arrangementClips.forEach((clip, clipIndex) => {
+          const track = tracks.find(item => item.id === clip.trackId);
+          if (!track || !selectedTracks.includes(track.id) || mutedTracks[track.id]) return;
+          const midiTrack = midi.addTrack();
+          const gmId = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
+          midiTrack.name = `${track.name} — ${clip.name}`;
+          midiTrack.channel = Math.min(15, clipIndex);
+          midiTrack.instrument.number = gmId;
+          clip.notes.forEach(note => {
+            midiTrack.addNote({
+              midi: note.pitch,
+              ticks: (clip.start + note.start) * ticksPer16th,
+              durationTicks: Math.max(1, note.duration * ticksPer16th),
+              velocity: note.velocity / 127
+            });
+            notesAdded++;
+          });
+        });
+      }
+
       if (notesAdded === 0) {
         alert('No notes or active tracks to export! Toggle some pads or hold buttons first.');
         return;
@@ -1112,7 +1174,7 @@ export default function SequencerWorkstation() {
     try {
       const projectData = {
         app: 'snuzy-workstation',
-        version: '2.0',
+        version: '3.0',
         timestamp: Date.now(),
         bpm,
         stepCount,
@@ -1125,7 +1187,8 @@ export default function SequencerWorkstation() {
         selectedTracks,
         holdTones,
         mutedTracks,
-        soloTracks
+        soloTracks,
+        arrangementClips
       };
 
       const jsonStr = JSON.stringify(projectData, null, 2);
@@ -1173,6 +1236,12 @@ export default function SequencerWorkstation() {
           if (data.holdTones) setHoldTones(data.holdTones);
           if (data.mutedTracks) setMutedTracks(data.mutedTracks);
           if (data.soloTracks) setSoloTracks(data.soloTracks);
+          if (Array.isArray(data.arrangementClips)) {
+            setArrangementClips(data.arrangementClips);
+            setActiveView('arrangement');
+          } else {
+            setActiveView('steps');
+          }
 
           if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
           setMidiToast({ visible: true, fileName: `${file.name} (Full Project Restored)` });
@@ -1270,6 +1339,7 @@ export default function SequencerWorkstation() {
       }
 
       setTracks(nextTracks);
+      setActiveView('steps');
       stepCountRef.current = importedStepCount;
       setStepCount(importedStepCount);
       setGrid(nextGrid);
@@ -1533,6 +1603,14 @@ export default function SequencerWorkstation() {
         </div>
       </div>
 
+      <div className="view-switcher" role="tablist" aria-label="Editor view">
+        <button className={activeView === 'arrangement' ? 'active' : ''} onClick={() => setActiveView('arrangement')}>▦ Arrangement</button>
+        <button className={activeView === 'steps' ? 'active' : ''} onClick={() => setActiveView('steps')}>▦ Step Sequencer</button>
+      </div>
+
+      {activeView === 'arrangement' ? (
+        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={setArrangementClips} />
+      ) : <>
       <div className="timeline-toolbar">
         <div>
           <strong>Arrangement</strong>
@@ -1808,6 +1886,7 @@ export default function SequencerWorkstation() {
           </div>
         </div>
       </div>
+      </>}
 
       <div
         style={{
