@@ -360,6 +360,7 @@ export default function SequencerWorkstation() {
   const [bpm, setBpm] = useState<number>(DEFAULT_BPM);
   const [stepCount, setStepCount] = useState<number>(DEFAULT_STEPS);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [autoFollow, setAutoFollow] = useState<boolean>(true);
   const [tracks, setTracks] = useState<TrackDef[]>(() => TRACK_DEFS.map(t => ({ ...t, presets: [...t.presets] })));
   const [selectedTracks, setSelectedTracks] = useState<string[]>(TRACK_DEFS.map(t => t.id));
   const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
@@ -429,6 +430,8 @@ export default function SequencerWorkstation() {
   const soloTracksRef = useRef(soloTracks);
   const stepCountRef = useRef(stepCount);
   const stepColCacheRef = useRef<Array<{ step: HTMLElement[] }>>([]);
+  const gridScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoFollowRef = useRef(autoFollow);
   const selectedTracksSetRef = useRef<Set<string>>(new Set(selectedTracks));
   const limiterRef = useRef<Tone.Limiter | null>(null);
 
@@ -475,6 +478,7 @@ export default function SequencerWorkstation() {
   useEffect(() => { mutedTracksRef.current = mutedTracks; }, [mutedTracks]);
   useEffect(() => { soloTracksRef.current = soloTracks; }, [soloTracks]);
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
+  useEffect(() => { autoFollowRef.current = autoFollow; }, [autoFollow]);
   useEffect(() => {
     selectedTracksRef.current = selectedTracks;
     selectedTracksSetRef.current = new Set(selectedTracks);
@@ -810,6 +814,22 @@ export default function SequencerWorkstation() {
           const prevStep = (step - 1 + steps) % steps;
           cache[prevStep]?.step.forEach(el => el.classList.remove('step-current'));
           cache[step]?.step.forEach(el => el.classList.add('step-current'));
+
+          const scroller = gridScrollRef.current;
+          const activeCell = cache[step]?.step.find(el => el.classList.contains('pad-cell'));
+          if (autoFollowRef.current && scroller && activeCell) {
+            const scrollerRect = scroller.getBoundingClientRect();
+            const cellRect = activeCell.getBoundingClientRect();
+            const stickyControlsWidth = 340;
+            const safeLeft = scrollerRect.left + stickyControlsWidth;
+            const safeRight = scrollerRect.right - 72;
+            if (cellRect.left < safeLeft || cellRect.right > safeRight) {
+              scroller.scrollTo({
+                left: Math.max(0, scroller.scrollLeft + cellRect.left - safeLeft),
+                behavior: 'smooth'
+              });
+            }
+          }
         }, time);
 
         stepRef.current = (step + 1) % steps;
@@ -1461,7 +1481,37 @@ export default function SequencerWorkstation() {
         </div>
       </div>
 
-      <div style={{ backgroundColor: '#131620', padding: 16, borderRadius: 10, overflowX: 'auto' }}>
+      <div className="timeline-toolbar">
+        <div>
+          <strong>Arrangement</strong>
+          <span>{stepCount / STEPS_PER_BAR} bars · {stepCount} steps</span>
+        </div>
+        <div className="timeline-toolbar-actions">
+          <button
+            type="button"
+            onClick={() => gridScrollRef.current?.scrollBy({ left: -gridScrollRef.current.clientWidth * 0.75, behavior: 'smooth' })}
+            title="Scroll backward"
+          >
+            ← Back
+          </button>
+          <button
+            type="button"
+            onClick={() => gridScrollRef.current?.scrollBy({ left: gridScrollRef.current.clientWidth * 0.75, behavior: 'smooth' })}
+            title="Scroll forward"
+          >
+            Forward →
+          </button>
+          <button type="button" onClick={() => gridScrollRef.current?.scrollTo({ left: 0, behavior: 'smooth' })}>
+            Start
+          </button>
+          <label title="Keep the current step visible during playback">
+            <input type="checkbox" checked={autoFollow} onChange={event => setAutoFollow(event.target.checked)} />
+            Follow playhead
+          </label>
+        </div>
+      </div>
+
+      <div ref={gridScrollRef} className="sequencer-scroll">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 720 }}>
           {tracks.map((track, channelIndex) => {
             const isSelected = selectedTracks.includes(track.id);
@@ -1488,6 +1538,7 @@ export default function SequencerWorkstation() {
                 }}
               >
                 <div
+                  className="sticky-track-controls"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1637,8 +1688,8 @@ export default function SequencerWorkstation() {
                 </div>
 
                 <button
+                  className="btn-hold sticky-hold-control"
                   onClick={() => toggleHold(track.id)}
-                  className="btn-hold"
                   style={{
                     padding: '6px 0',
                     fontSize: 10,
@@ -1678,27 +1729,29 @@ export default function SequencerWorkstation() {
               </div>
             );
           })}
-        </div>
-      </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: gridTemplate,
-          gap: 6,
-          marginTop: 8,
-          padding: '0 16px',
-          textAlign: 'center',
-          minWidth: 720
-        }}
-      >
-        <div></div>
-        <div></div>
-        {Array.from({ length: stepCount }).map((_, i) => (
-          <div key={i} className={`step-num step-col-${i}`}>
-            {i + 1}
+          <div
+            className="step-ruler"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: gridTemplate,
+              gap: 6,
+              textAlign: 'center'
+            }}
+          >
+            <div className="sticky-track-controls ruler-label">CHANNEL</div>
+            <div className="sticky-hold-control ruler-label">HOLD</div>
+            {Array.from({ length: stepCount }).map((_, i) => (
+              <div
+                key={i}
+                className={`step-num step-col-${i} ${i % STEPS_PER_BAR === 0 ? 'bar-start' : ''}`}
+                title={`Bar ${Math.floor(i / STEPS_PER_BAR) + 1}, step ${(i % STEPS_PER_BAR) + 1}`}
+              >
+                {i % STEPS_PER_BAR === 0 ? `B${Math.floor(i / STEPS_PER_BAR) + 1}` : i + 1}
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
 
       <div

@@ -129,6 +129,134 @@ button:active {
   transform: translateY(-1px);
 }
 
+/* Long arrangement navigation */
+.timeline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid #242b3c;
+  border-radius: 9px 9px 4px 4px;
+  background: linear-gradient(135deg, #171c29, #111520);
+  color: #e8edf3;
+}
+
+.timeline-toolbar > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.timeline-toolbar span {
+  color: #78909c;
+  font-size: 11px;
+}
+
+.timeline-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.timeline-toolbar-actions button,
+.timeline-toolbar-actions label {
+  border: 1px solid #344057;
+  border-radius: 5px;
+  background: #222a3b;
+  color: #cfd8dc;
+  padding: 5px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.timeline-toolbar-actions label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #80deea;
+}
+
+.sequencer-scroll {
+  position: relative;
+  overflow: auto;
+  max-height: min(68vh, 760px);
+  padding: 16px;
+  border: 1px solid #242b3c;
+  border-radius: 4px 4px 10px 10px;
+  background: #131620;
+  scrollbar-color: #00a8bb #171c29;
+  scrollbar-width: thin;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+.sequencer-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.sequencer-scroll::-webkit-scrollbar-track {
+  background: #171c29;
+}
+
+.sequencer-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid #171c29;
+  border-radius: 999px;
+  background: #00a8bb;
+}
+
+.sticky-track-controls,
+.sticky-hold-control {
+  position: sticky;
+  z-index: 5;
+}
+
+.sticky-track-controls {
+  left: 0;
+  box-shadow: 8px 0 12px -10px #000;
+}
+
+.sticky-hold-control {
+  left: 274px;
+  box-shadow: 8px 0 12px -10px #000;
+}
+
+.step-ruler {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  padding: 7px 0 3px;
+  background: linear-gradient(to bottom, #131620dd, #131620 35%);
+}
+
+.ruler-label {
+  overflow: hidden;
+  color: #607d8b;
+  background: #131620;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.step-num.bar-start {
+  color: #00b8d4;
+  font-weight: 800;
+}
+
+@media (max-width: 760px) {
+  .timeline-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sequencer-scroll {
+    max-height: 72vh;
+    padding: 10px;
+  }
+}
+
 /* Input range slider transition */
 input[type="range"] {
   transition: opacity 0.2s ease, filter 0.2s ease;
@@ -159,4 +287,3 @@ select:hover {
 select:focus {
   border-color: #00e5ff !important;
 }
-
