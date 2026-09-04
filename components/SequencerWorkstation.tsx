@@ -1162,7 +1162,9 @@ export default function SequencerWorkstation() {
           Math.max(trackLatest, note.ticks + note.durationTicks)
         ), latest)
       ), 0);
-      const importedStepCount = normalizeStepCount(Math.ceil(lastNoteEndTicks / ticksPer16th));
+      const sourceStepCount = Math.ceil(lastNoteEndTicks / ticksPer16th);
+      const importedStepCount = normalizeStepCount(sourceStepCount);
+      const importWasTruncated = sourceStepCount > importedStepCount;
 
       if (imported.header.tempos && imported.header.tempos.length > 0) {
         const fileBpm = Math.round(imported.header.tempos[0].bpm);
@@ -1177,45 +1179,55 @@ export default function SequencerWorkstation() {
       const nextPresets: Record<string, string> = {};
       const nextVel: Record<string, number> = {};
       const nextSelected: string[] = [];
+      const programsToLoad = new Set<number>();
+      const importId = Date.now();
 
       instrumentTracks.forEach((t, i) => {
         const gmProg = typeof t.instrument?.number === 'number'
           ? Math.max(0, Math.min(127, t.instrument.number))
           : 0;
         const gm = GM_INSTRUMENTS[gmProg];
-        const pitches = t.notes.map(n => n.midi);
-        const avgPitch = pitches.length
-          ? Math.round(pitches.reduce((a, b) => a + b, 0) / pitches.length)
-          : 60;
-        const noteName = midiNoteName(Math.max(24, Math.min(96, avgPitch)));
-        const id = `midi_${i}_${Date.now()}`;
-        const velAvg = t.notes.length
-          ? Math.round((t.notes.reduce((a, n) => a + n.velocity, 0) / t.notes.length) * 127)
-          : 100;
-
-        const track: TrackDef = {
-          id,
-          name: t.name || gm?.name || `Channel ${i + 1}`,
-          category: 'SoundFont Instruments',
-          type: 'soundfont',
-          note: noteName,
-          color: CHANNEL_COLORS[i % CHANNEL_COLORS.length],
-          presets: MIDI_NOTE_PRESETS,
-          defaultGmId: gmProg
-        };
-
-        nextTracks.push(track);
-        nextGrid[id] = emptyRow(importedStepCount);
+        const notesByPitch = new Map<number, typeof t.notes>();
         t.notes.forEach(n => {
           const stepIndex = Math.round(n.ticks / ticksPer16th);
-          if (stepIndex < importedStepCount) nextGrid[id][stepIndex] = true;
+          if (stepIndex >= importedStepCount) return;
+          const pitchNotes = notesByPitch.get(n.midi) || [];
+          pitchNotes.push(n);
+          notesByPitch.set(n.midi, pitchNotes);
         });
-        nextGm[id] = gmProg;
-        nextEngine[id] = 'soundfont';
-        nextPresets[id] = noteName;
-        nextVel[id] = Math.max(1, Math.min(127, velAvg));
-        nextSelected.push(id);
-        loadSoundFontInstrument(gmProg);
+
+        [...notesByPitch.entries()].sort(([a], [b]) => a - b).forEach(([pitch, pitchNotes]) => {
+          const noteName = midiNoteName(Math.max(24, Math.min(95, pitch)));
+          const id = `midi_${importId}_${i}_${pitch}`;
+          const velocity = Math.round(
+            (pitchNotes.reduce((sum, note) => sum + note.velocity, 0) / pitchNotes.length) * 127
+          );
+          const channelIndex = nextTracks.length;
+          const trackName = t.name || gm?.name || `MIDI Track ${i + 1}`;
+          const track: TrackDef = {
+            id,
+            name: `${trackName} · ${noteName}`,
+            category: 'SoundFont Instruments',
+            type: 'soundfont',
+            note: noteName,
+            color: CHANNEL_COLORS[channelIndex % CHANNEL_COLORS.length],
+            presets: MIDI_NOTE_PRESETS,
+            defaultGmId: gmProg
+          };
+
+          nextTracks.push(track);
+          nextGrid[id] = emptyRow(importedStepCount);
+          pitchNotes.forEach(note => {
+            const stepIndex = Math.round(note.ticks / ticksPer16th);
+            nextGrid[id][stepIndex] = true;
+          });
+          nextGm[id] = gmProg;
+          nextEngine[id] = 'soundfont';
+          nextPresets[id] = noteName;
+          nextVel[id] = Math.max(1, Math.min(127, velocity));
+          nextSelected.push(id);
+          programsToLoad.add(gmProg);
+        });
       });
 
       if (nextTracks.length === 0) {
@@ -1235,9 +1247,15 @@ export default function SequencerWorkstation() {
       setHoldTones({});
       setMutedTracks({});
       setSoloTracks({});
+      programsToLoad.forEach(program => loadSoundFontInstrument(program));
 
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      setMidiToast({ visible: true, fileName: file.name });
+      setMidiToast({
+        visible: true,
+        fileName: importWasTruncated
+          ? `${file.name} (loaded first ${importedStepCount} of ${sourceStepCount} steps)`
+          : file.name
+      });
       toastTimerRef.current = setTimeout(() => {
         setMidiToast(prev => ({ ...prev, visible: false }));
       }, 3000);
