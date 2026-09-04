@@ -317,6 +317,15 @@ export const TRACK_DEFS: TrackDef[] = [
 
 export const DEFAULT_STEPS = 16;
 export const DEFAULT_BPM = 120;
+export const STEPS_PER_BAR = 16;
+export const MAX_STEPS = 256;
+const BAR_OPTIONS = [1, 2, 4, 8, 16];
+
+function normalizeStepCount(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_STEPS;
+  const bars = Math.ceil(value / STEPS_PER_BAR);
+  return Math.max(STEPS_PER_BAR, Math.min(MAX_STEPS, bars * STEPS_PER_BAR));
+}
 
 function defaultGmForTrack(track: TrackDef): number {
   if (track.defaultGmId !== undefined) return track.defaultGmId;
@@ -839,6 +848,7 @@ export default function SequencerWorkstation() {
   };
 
   const resizeGrid = (nextSteps: number) => {
+    nextSteps = normalizeStepCount(nextSteps);
     setGrid(prev => {
       const next: Record<string, boolean[]> = {};
       Object.keys(prev).forEach(id => {
@@ -849,6 +859,7 @@ export default function SequencerWorkstation() {
       });
       return next;
     });
+    stepCountRef.current = nextSteps;
     setStepCount(nextSteps);
   };
 
@@ -1093,7 +1104,11 @@ export default function SequencerWorkstation() {
         const data = JSON.parse(text);
         if (data.app === 'snuzy-workstation') {
           if (typeof data.bpm === 'number') setBpm(data.bpm);
-          if (typeof data.stepCount === 'number') setStepCount(data.stepCount);
+          if (typeof data.stepCount === 'number') {
+            const importedStepCount = normalizeStepCount(data.stepCount);
+            stepCountRef.current = importedStepCount;
+            setStepCount(importedStepCount);
+          }
           if (Array.isArray(data.tracks) && data.tracks.length > 0) setTracks(data.tracks);
           if (data.grid) setGrid(data.grid);
           if (data.trackPresets) setTrackPresets(data.trackPresets);
@@ -1122,6 +1137,12 @@ export default function SequencerWorkstation() {
 
       const ppq = imported.header.ppq || 480;
       const ticksPer16th = ppq / 4;
+      const lastNoteEndTicks = imported.tracks.reduce((latest, track) => (
+        track.notes.reduce((trackLatest, note) => (
+          Math.max(trackLatest, note.ticks + note.durationTicks)
+        ), latest)
+      ), 0);
+      const importedStepCount = normalizeStepCount(Math.ceil(lastNoteEndTicks / ticksPer16th));
 
       if (imported.header.tempos && imported.header.tempos.length > 0) {
         const fileBpm = Math.round(imported.header.tempos[0].bpm);
@@ -1164,10 +1185,10 @@ export default function SequencerWorkstation() {
         };
 
         nextTracks.push(track);
-        nextGrid[id] = emptyRow(stepCount);
+        nextGrid[id] = emptyRow(importedStepCount);
         t.notes.forEach(n => {
-          const stepIndex = Math.round(n.ticks / ticksPer16th) % stepCount;
-          nextGrid[id][stepIndex] = true;
+          const stepIndex = Math.round(n.ticks / ticksPer16th);
+          if (stepIndex < importedStepCount) nextGrid[id][stepIndex] = true;
         });
         nextGm[id] = gmProg;
         nextEngine[id] = 'soundfont';
@@ -1183,6 +1204,8 @@ export default function SequencerWorkstation() {
       }
 
       setTracks(nextTracks);
+      stepCountRef.current = importedStepCount;
+      setStepCount(importedStepCount);
       setGrid(nextGrid);
       setTrackGmInstruments(nextGm);
       setTrackEngine(nextEngine);
@@ -1282,25 +1305,29 @@ export default function SequencerWorkstation() {
           </label>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: '#cfd8dc' }}>
-            Steps
+            Length <span style={{ color: '#78909c' }}>({stepCount} steps)</span>
             <div style={{ display: 'flex', gap: 4 }}>
-              {[16, 32].map(n => (
+              {BAR_OPTIONS.map(bars => {
+                const steps = bars * STEPS_PER_BAR;
+                return (
                 <button
-                  key={n}
-                  onClick={() => resizeGrid(n)}
+                  key={bars}
+                  onClick={() => resizeGrid(steps)}
+                  title={`${bars} ${bars === 1 ? 'bar' : 'bars'} at 4/4`}
                   style={{
-                    padding: '4px 10px',
+                    padding: '4px 8px',
                     borderRadius: 4,
                     border: 'none',
                     cursor: 'pointer',
                     fontWeight: 700,
-                    background: stepCount === n ? '#00e5ff' : '#262f40',
-                    color: stepCount === n ? '#000' : '#eee'
+                    background: stepCount === steps ? '#00e5ff' : '#262f40',
+                    color: stepCount === steps ? '#000' : '#eee'
                   }}
                 >
-                  {n}
+                  {bars}B
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
 
