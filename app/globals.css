@@ -90,11 +90,7 @@ button:active {
   height: 36px;
   border-radius: 4px;
   cursor: pointer;
-  transition: transform 0.08s cubic-bezier(0.2, 0.8, 0.2, 1),
-              filter 0.1s ease,
-              box-shadow 0.12s ease,
-              background-color 0.1s ease;
-  will-change: transform;
+  transition: filter 0.08s ease, background-color 0.08s ease;
 }
 
 .pad-cell:hover {
@@ -107,11 +103,14 @@ button:active {
 }
 
 .pad-cell.step-current {
-  transform: scale(1.1);
-  outline: 2px solid #ffffff;
-  outline-offset: 1px;
-  box-shadow: 0 0 14px rgba(255, 255, 255, 0.95);
+  outline: 1px solid rgba(255, 255, 255, 0.72);
+  outline-offset: -1px;
   z-index: 2;
+}
+
+.pad-cell.note-playing {
+  outline: 2px solid #fff;
+  box-shadow: inset 0 0 0 2px #ffffff66, 0 0 8px #ffffff88 !important;
 }
 
 /* Step Number indicator */
@@ -189,7 +188,6 @@ button:active {
   background: #131620;
   scrollbar-color: #00a8bb #171c29;
   scrollbar-width: thin;
-  scroll-behavior: smooth;
   overscroll-behavior: contain;
 }
 
@@ -254,6 +252,17 @@ button:active {
   .sequencer-scroll {
     max-height: 72vh;
     padding: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

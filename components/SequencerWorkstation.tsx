@@ -465,9 +465,12 @@ export default function SequencerWorkstation() {
   };
 
   const refreshStepColCache = () => {
-    stepColCacheRef.current = Array.from({ length: stepCountRef.current }, (_, i) => ({
-      step: Array.from(document.querySelectorAll<HTMLElement>(`.step-col-${i}`))
-    }));
+    const cache = Array.from({ length: stepCountRef.current }, () => ({ step: [] as HTMLElement[] }));
+    document.querySelectorAll<HTMLElement>('[data-sequencer-step]').forEach(element => {
+      const step = Number(element.dataset.sequencerStep);
+      if (Number.isInteger(step) && cache[step]) cache[step].step.push(element);
+    });
+    stepColCacheRef.current = cache;
   };
 
   useEffect(() => { holdTonesRef.current = holdTones; }, [holdTones]);
@@ -757,9 +760,15 @@ export default function SequencerWorkstation() {
     stepRef.current = 0;
     const cache = stepColCacheRef.current;
     if (cache.length > 0) {
-      cache.forEach(c => c.step.forEach(el => el.classList.remove('step-current')));
+      cache.forEach(c => c.step.forEach(el => {
+        el.classList.remove('step-current');
+        el.classList.remove('note-playing');
+      }));
     } else {
-      document.querySelectorAll('.step-current').forEach(el => el.classList.remove('step-current'));
+      document.querySelectorAll('.step-current, .note-playing').forEach(el => {
+        el.classList.remove('step-current');
+        el.classList.remove('note-playing');
+      });
     }
   };
 
@@ -812,22 +821,47 @@ export default function SequencerWorkstation() {
             cache = stepColCacheRef.current;
           }
           const prevStep = (step - 1 + steps) % steps;
-          cache[prevStep]?.step.forEach(el => el.classList.remove('step-current'));
+          cache[prevStep]?.step.forEach(el => {
+            el.classList.remove('step-current');
+            el.classList.remove('note-playing');
+          });
           cache[step]?.step.forEach(el => el.classList.add('step-current'));
 
           const scroller = gridScrollRef.current;
-          const activeCell = cache[step]?.step.find(el => el.classList.contains('pad-cell'));
-          if (autoFollowRef.current && scroller && activeCell) {
+          const activeCells = cache[step]?.step.filter(element => {
+            const trackId = element.dataset.trackId;
+            const active = element.classList.contains('pad-cell') && !!trackId
+              && channelAudible(trackId)
+              && !!(currentGrid[trackId]?.[step] || currentHolds[trackId]);
+            if (active) element.classList.add('note-playing');
+            return active;
+          });
+          const horizontalTarget = cache[step]?.step.find(el => el.classList.contains('pad-cell'));
+          if (autoFollowRef.current && scroller && horizontalTarget) {
             const scrollerRect = scroller.getBoundingClientRect();
-            const cellRect = activeCell.getBoundingClientRect();
+            const cellRect = horizontalTarget.getBoundingClientRect();
             const stickyControlsWidth = 340;
             const safeLeft = scrollerRect.left + stickyControlsWidth;
             const safeRight = scrollerRect.right - 72;
+            let nextLeft = scroller.scrollLeft;
+            let nextTop = scroller.scrollTop;
             if (cellRect.left < safeLeft || cellRect.right > safeRight) {
-              scroller.scrollTo({
-                left: Math.max(0, scroller.scrollLeft + cellRect.left - safeLeft),
-                behavior: 'smooth'
-              });
+              nextLeft = Math.max(0, scroller.scrollLeft + cellRect.left - safeLeft);
+            }
+
+            if (activeCells.length > 0) {
+              const sortedCells = [...activeCells].sort((a, b) => a.offsetTop - b.offsetTop);
+              const focusCell = sortedCells[Math.floor(sortedCells.length / 2)];
+              const focusRect = focusCell.getBoundingClientRect();
+              const safeTop = scrollerRect.top + 72;
+              const safeBottom = scrollerRect.bottom - 72;
+              if (focusRect.top < safeTop || focusRect.bottom > safeBottom) {
+                nextTop = Math.max(0, scroller.scrollTop + focusRect.top - scrollerRect.top - scroller.clientHeight / 2);
+              }
+            }
+
+            if (nextLeft !== scroller.scrollLeft || nextTop !== scroller.scrollTop) {
+              scroller.scrollTo({ left: nextLeft, top: nextTop, behavior: 'auto' });
             }
           }
         }, time);
@@ -1735,6 +1769,8 @@ export default function SequencerWorkstation() {
                       key={stepIdx}
                       onClick={() => togglePad(track.id, stepIdx)}
                       className={`pad-cell step-col-${stepIdx}`}
+                      data-sequencer-step={stepIdx}
+                      data-track-id={track.id}
                       style={{
                         backgroundColor: padBackground,
                         border: isGroupFour ? '1px solid #455a64' : '1px solid #283145',
@@ -1763,6 +1799,7 @@ export default function SequencerWorkstation() {
               <div
                 key={i}
                 className={`step-num step-col-${i} ${i % STEPS_PER_BAR === 0 ? 'bar-start' : ''}`}
+                data-sequencer-step={i}
                 title={`Bar ${Math.floor(i / STEPS_PER_BAR) + 1}, step ${(i % STEPS_PER_BAR) + 1}`}
               >
                 {i % STEPS_PER_BAR === 0 ? `B${Math.floor(i / STEPS_PER_BAR) + 1}` : i + 1}
