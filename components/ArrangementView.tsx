@@ -26,19 +26,24 @@ interface Props {
   stepCount: number;
   clips: InstrumentClip[];
   setClips: React.Dispatch<React.SetStateAction<InstrumentClip[]>>;
+  onExtend?: (extraSteps: number) => void;
 }
 
-const PITCHES = Array.from({ length: 60 }, (_, index) => 95 - index);
+const PITCH_LOW = 21;
+const PITCH_HIGH = 108;
+const PITCHES = Array.from({ length: PITCH_HIGH - PITCH_LOW + 1 }, (_, index) => PITCH_HIGH - index);
+const CLIP_LENGTH_OPTIONS = [8, 16, 32, 64, 128, 256, 512];
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const pitchName = (pitch: number) => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
 const uid = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-export default function ArrangementView({ tracks, stepCount, clips, setClips }: Props) {
+export default function ArrangementView({ tracks, stepCount, clips, setClips, onExtend }: Props) {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(clips[0]?.id ?? null);
   const [noteLength, setNoteLength] = useState(1);
   const selectedClip = clips.find(clip => clip.id === selectedClipId) ?? null;
   const bars = Math.ceil(stepCount / 16);
-  const timelineWidth = Math.max(900, stepCount * 28);
+  const pxPerStep = stepCount > 512 ? 8 : stepCount > 256 ? 12 : stepCount > 128 ? 18 : 28;
+  const timelineWidth = Math.max(900, stepCount * pxPerStep);
 
   const clipsByTrack = useMemo(() => {
     const grouped: Record<string, InstrumentClip[]> = {};
@@ -72,6 +77,24 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips }: 
     setSelectedClipId(copy.id);
   };
 
+  const splitClip = (clip: InstrumentClip) => {
+    if (clip.length < 2) return;
+    const mid = Math.floor(clip.length / 2);
+    const leftNotes = clip.notes.filter(note => note.start < mid).map(note => ({ ...note, id: uid('note') }));
+    const rightNotes = clip.notes
+      .filter(note => note.start >= mid)
+      .map(note => ({ ...note, id: uid('note'), start: note.start - mid }));
+    const left: InstrumentClip = {
+      ...clip, id: uid('clip'), name: `${clip.name} A`, length: mid, notes: leftNotes
+    };
+    const right: InstrumentClip = {
+      ...clip, id: uid('clip'), name: `${clip.name} B`, start: clip.start + mid,
+      length: clip.length - mid, notes: rightNotes
+    };
+    setClips(previous => [...previous.filter(c => c.id !== clip.id), left, right]);
+    setSelectedClipId(right.id);
+  };
+
   const toggleNote = (pitch: number, start: number) => {
     if (!selectedClip) return;
     const existing = selectedClip.notes.find(note => note.pitch === pitch && note.start === start);
@@ -87,8 +110,16 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips }: 
   return (
     <section className="arrangement-workspace">
       <div className="arrangement-heading">
-        <div><strong>Song Timeline</strong><span>{bars} bars · click a clip to edit its notes</span></div>
-        <span className="arrangement-hint">Each block is an independent instrument pattern</span>
+        <div><strong>Song Timeline</strong><span>{bars} bars · {stepCount} steps · {clips.length} blocks · click a clip to edit its notes</span></div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="arrangement-hint">Endless blocks — full songs welcome</span>
+          {onExtend && (
+            <>
+              <button onClick={() => onExtend(64)} title="Add 4 bars to the timeline" style={{ padding: '5px 9px', borderRadius: 5, border: '1px solid #3b475d', background: '#252e40', color: '#00d9ef', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>+4 bars</button>
+              <button onClick={() => onExtend(256)} title="Add 16 bars to the timeline" style={{ padding: '5px 9px', borderRadius: 5, border: '1px solid #3b475d', background: '#252e40', color: '#00d9ef', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>+16 bars</button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="arrangement-scroll">
@@ -131,9 +162,10 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips }: 
               <span>{tracks.find(track => track.id === selectedClip.trackId)?.name}</span>
             </div>
             <label>Start <input type="number" min={0} max={stepCount - selectedClip.length} value={selectedClip.start} onChange={event => updateClip(selectedClip.id, { start: Math.max(0, Math.min(stepCount - selectedClip.length, Number(event.target.value))) })} /></label>
-            <label>Length <select value={selectedClip.length} onChange={event => updateClip(selectedClip.id, { length: Number(event.target.value), notes: selectedClip.notes.filter(note => note.start < Number(event.target.value)) })}>{[8, 16, 32, 64].filter(length => length <= stepCount).map(length => <option key={length}>{length}</option>)}</select></label>
+            <label>Length <select value={selectedClip.length} onChange={event => updateClip(selectedClip.id, { length: Number(event.target.value), notes: selectedClip.notes.filter(note => note.start < Number(event.target.value)) })}>{CLIP_LENGTH_OPTIONS.filter(length => length <= stepCount).map(length => <option key={length}>{length}</option>)}</select></label>
             <label>Draw <select value={noteLength} onChange={event => setNoteLength(Number(event.target.value))}>{[1, 2, 4, 8].map(length => <option key={length} value={length}>{length} step{length > 1 ? 's' : ''}</option>)}</select></label>
             <button onClick={() => duplicateClip(selectedClip)}><Copy size={14} /> Duplicate</button>
+            <button onClick={() => splitClip(selectedClip)} title="Split this block into two endless blocks">Split</button>
             <button className="danger" onClick={() => { setClips(previous => previous.filter(clip => clip.id !== selectedClip.id)); setSelectedClipId(null); }}><Trash2 size={14} /> Delete</button>
           </div>
           <div className="piano-roll-scroll">

@@ -9,6 +9,10 @@ import {
   SoundFontPlayer
 } from './SoundFontEngine';
 import ArrangementView, { type InstrumentClip } from './ArrangementView';
+import { SHOWCASE_SONG } from './ShowcaseSong';
+
+const SHOWCASE_TRACKS = SHOWCASE_SONG.tracks as unknown as TrackDef[];
+const SHOWCASE_CLIPS = SHOWCASE_SONG.clips as unknown as InstrumentClip[];
 
 export interface SoundPreset {
   id: string;
@@ -319,8 +323,10 @@ export const TRACK_DEFS: TrackDef[] = [
 export const DEFAULT_STEPS = 16;
 export const DEFAULT_BPM = 120;
 export const STEPS_PER_BAR = 16;
-export const MAX_STEPS = 256;
-const BAR_OPTIONS = [1, 2, 4, 8, 16];
+export const MAX_STEPS = 8192;
+export const ENDLESS_BLOCK_STEPS = 64;
+const BAR_OPTIONS = [1, 2, 4, 8, 16, 32, 64, 128];
+
 
 function normalizeStepCount(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_STEPS;
@@ -358,45 +364,27 @@ const selectStyle: React.CSSProperties = {
 };
 
 export default function SequencerWorkstation() {
-  const [bpm, setBpm] = useState<number>(DEFAULT_BPM);
-  const [stepCount, setStepCount] = useState<number>(DEFAULT_STEPS);
+  // Preset startup song, baked in from public/midi/placeholder.mid via
+  // `npm run showcase` — renders instantly, no fetch, no loading flash.
+  const [bpm, setBpm] = useState<number>(SHOWCASE_SONG.bpm);
+  const [stepCount, setStepCount] = useState<number>(SHOWCASE_SONG.stepCount);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [autoFollow, setAutoFollow] = useState<boolean>(true);
   const [activeView, setActiveView] = useState<'arrangement' | 'steps'>('arrangement');
-  const [arrangementClips, setArrangementClips] = useState<InstrumentClip[]>([
-    { id: 'starter_drums', trackId: 'kick', name: 'Drum foundation', start: 0, length: 16, notes: [{ id: 'n1', pitch: 36, start: 0, duration: 1, velocity: 110 }, { id: 'n2', pitch: 36, start: 8, duration: 1, velocity: 110 }] },
-    { id: 'starter_bass', trackId: 'bass', name: 'Bass idea', start: 0, length: 16, notes: [{ id: 'n3', pitch: 36, start: 0, duration: 4, velocity: 100 }, { id: 'n4', pitch: 43, start: 8, duration: 4, velocity: 96 }] },
-    { id: 'starter_lead', trackId: 'synth_lead', name: 'Lead idea', start: 0, length: 16, notes: [{ id: 'n5', pitch: 60, start: 0, duration: 2, velocity: 100 }, { id: 'n6', pitch: 64, start: 4, duration: 2, velocity: 100 }, { id: 'n7', pitch: 67, start: 8, duration: 4, velocity: 105 }] }
-  ]);
-  const [tracks, setTracks] = useState<TrackDef[]>(() => TRACK_DEFS.map(t => ({ ...t, presets: [...t.presets] })));
-  const [selectedTracks, setSelectedTracks] = useState<string[]>(TRACK_DEFS.map(t => t.id));
+  const [arrangementClips, setArrangementClips] = useState<InstrumentClip[]>(() => SHOWCASE_CLIPS.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) })));
+  const [tracks, setTracks] = useState<TrackDef[]>(() => SHOWCASE_TRACKS.map(t => ({ ...t, presets: MIDI_NOTE_PRESETS })));
+  const [selectedTracks, setSelectedTracks] = useState<string[]>(() => [...SHOWCASE_SONG.selected]);
   const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
   const [mutedTracks, setMutedTracks] = useState<Record<string, boolean>>({});
   const [soloTracks, setSoloTracks] = useState<Record<string, boolean>>({});
   const [midiToast, setMidiToast] = useState<{ visible: boolean; fileName: string }>({ visible: false, fileName: '' });
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [trackPresets, setTrackPresets] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    TRACK_DEFS.forEach(t => {
-      initial[t.id] = t.type === 'soundfont' ? t.note : (t.presets[0]?.id || '');
-    });
-    return initial;
-  });
+  const [trackPresets, setTrackPresets] = useState<Record<string, string>>(() => ({ ...(SHOWCASE_SONG.presets as Record<string, string>) }));
 
-  const [trackEngine, setTrackEngine] = useState<Record<string, TrackEngine>>(() => {
-    const initial: Record<string, TrackEngine> = {};
-    TRACK_DEFS.forEach(t => {
-      initial[t.id] = t.type === 'soundfont' ? 'soundfont' : 'synth';
-    });
-    return initial;
-  });
+  const [trackEngine, setTrackEngine] = useState<Record<string, TrackEngine>>(() => ({ ...(SHOWCASE_SONG.gm ? Object.fromEntries(Object.keys(SHOWCASE_SONG.gm).map(id => [id, 'soundfont' as TrackEngine])) : {}) }));
 
-  const [trackVelocity, setTrackVelocity] = useState<Record<string, number>>(() => {
-    const initial: Record<string, number> = {};
-    TRACK_DEFS.forEach(t => { initial[t.id] = 100; });
-    return initial;
-  });
+  const [trackVelocity, setTrackVelocity] = useState<Record<string, number>>(() => ({ ...(SHOWCASE_SONG.velocity as Record<string, number>) }));
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -405,22 +393,11 @@ export default function SequencerWorkstation() {
 
   const [grid, setGrid] = useState<Record<string, boolean[]>>(() => {
     const initial: Record<string, boolean[]> = {};
-    TRACK_DEFS.forEach(t => {
-      initial[t.id] = emptyRow(DEFAULT_STEPS);
+    Object.entries(SHOWCASE_SONG.gridSteps as Record<string, number[]>).forEach(([id, steps]) => {
+      const row = emptyRow(SHOWCASE_SONG.stepCount);
+      steps.forEach(s => { if (s < row.length) row[s] = true; });
+      initial[id] = row;
     });
-    initial.kick[0] = true;
-    initial.kick[8] = true;
-    initial.snare[4] = true;
-    initial.snare[12] = true;
-    initial.hihat[2] = true;
-    initial.hihat[6] = true;
-    initial.hihat[10] = true;
-    initial.hihat[14] = true;
-    initial.bass[0] = true;
-    initial.bass[6] = true;
-    initial.bass[10] = true;
-    initial.chord_pad[0] = true;
-    initial.chord_pad[8] = true;
     return initial;
   });
 
@@ -446,13 +423,7 @@ export default function SequencerWorkstation() {
 
   const groupedGmInstruments = React.useMemo(() => getInstrumentsByCategory(), []);
 
-  const [trackGmInstruments, setTrackGmInstruments] = useState<Record<string, number>>(() => {
-    const initial: Record<string, number> = {};
-    TRACK_DEFS.forEach(t => {
-      initial[t.id] = defaultGmForTrack(t);
-    });
-    return initial;
-  });
+  const [trackGmInstruments, setTrackGmInstruments] = useState<Record<string, number>>(() => ({ ...(SHOWCASE_SONG.gm as Record<string, number>) }));
 
   const trackGmInstrumentsRef = useRef(trackGmInstruments);
   useEffect(() => { trackGmInstrumentsRef.current = trackGmInstruments; }, [trackGmInstruments]);
@@ -526,7 +497,10 @@ export default function SequencerWorkstation() {
       setSfStatus(prev => ({ ...prev, [instrumentId]: state }));
     };
 
-    [0, 24, 33, 48, 61, 81, 116].forEach(id => {
+    // Preset showcase song instruments first so every track sounds on first play,
+    // then the generic defaults.
+    const showcaseGm = SHOWCASE_SONG.tracks.map(t => t.defaultGmId ?? 0);
+    [...new Set([0, 24, 33, 48, 61, 81, 116, ...showcaseGm])].forEach(id => {
       sfPlayer.loadInstrument(id).catch(() => {});
     });
 
@@ -956,6 +930,12 @@ export default function SequencerWorkstation() {
     setStepCount(nextSteps);
   };
 
+  const extendTimeline = (extraSteps: number) => {
+    const target = normalizeStepCount(stepCountRef.current + extraSteps);
+    if (target <= stepCountRef.current) return;
+    resizeGrid(target);
+  };
+
   const clearGrid = () => {
     const empty: Record<string, boolean[]> = {};
     tracks.forEach(t => {
@@ -1210,6 +1190,182 @@ export default function SequencerWorkstation() {
     }
   };
 
+  const showToast = (fileName: string, ms = 3500) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setMidiToast({ visible: true, fileName });
+    toastTimerRef.current = setTimeout(() => {
+      setMidiToast(prev => ({ ...prev, visible: false }));
+    }, ms);
+  };
+
+  const applyProjectData = (data: any, label: string) => {
+    if (typeof data.bpm === 'number') setBpm(data.bpm);
+    if (typeof data.stepCount === 'number') {
+      const importedStepCount = normalizeStepCount(data.stepCount);
+      stepCountRef.current = importedStepCount;
+      setStepCount(importedStepCount);
+    }
+    if (Array.isArray(data.tracks) && data.tracks.length > 0) setTracks(data.tracks);
+    if (data.grid) setGrid(data.grid);
+    if (data.trackPresets) setTrackPresets(data.trackPresets);
+    if (data.trackGmInstruments) setTrackGmInstruments(data.trackGmInstruments);
+    if (data.trackEngine) setTrackEngine(data.trackEngine);
+    if (data.trackVelocity) setTrackVelocity(data.trackVelocity);
+    if (data.selectedTracks) setSelectedTracks(data.selectedTracks);
+    if (data.holdTones) setHoldTones(data.holdTones);
+    if (data.mutedTracks) setMutedTracks(data.mutedTracks);
+    if (data.soloTracks) setSoloTracks(data.soloTracks);
+    if (Array.isArray(data.arrangementClips)) {
+      setArrangementClips(data.arrangementClips);
+      setActiveView('arrangement');
+    } else {
+      setActiveView('steps');
+    }
+    const programs = new Set<number>(Object.values((data.trackGmInstruments || {}) as Record<string, number>));
+    programs.forEach(program => loadSoundFontInstrument(program));
+    showToast(label);
+  };
+
+  const applyMidiObject = (imported: Midi, fileName: string) => {
+    if (isPlaying) stopTransport();
+    stepColCacheRef.current = [];
+
+    const ppq = imported.header.ppq || 480;
+    const ticksPer16th = ppq / 4;
+    const lastNoteEndTicks = imported.tracks.reduce((latest, track) => (
+      track.notes.reduce((trackLatest, note) => (
+        Math.max(trackLatest, note.ticks + note.durationTicks)
+      ), latest)
+    ), 0);
+    const rawStepCount = Math.max(16, Math.ceil(lastNoteEndTicks / ticksPer16th));
+    const importWasTruncated = rawStepCount > MAX_STEPS;
+    const importedStepCount = normalizeStepCount(Math.min(rawStepCount, MAX_STEPS));
+
+    if (imported.header.tempos && imported.header.tempos.length > 0) {
+      const fileBpm = Math.round(imported.header.tempos[0].bpm);
+      if (fileBpm >= 60 && fileBpm <= 180) setBpm(fileBpm);
+    }
+
+    const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
+    const nextTracks: TrackDef[] = [];
+    const nextGrid: Record<string, boolean[]> = {};
+    const nextGm: Record<string, number> = {};
+    const nextEngine: Record<string, TrackEngine> = {};
+    const nextPresets: Record<string, string> = {};
+    const nextVel: Record<string, number> = {};
+    const nextSelected: string[] = [];
+    const nextClips: InstrumentClip[] = [];
+    const programsToLoad = new Set<number>();
+    const importId = Date.now();
+
+    instrumentTracks.forEach((t, i) => {
+      const gmProg = typeof t.instrument?.number === 'number'
+        ? Math.max(0, Math.min(127, t.instrument.number))
+        : 0;
+      const gm = GM_INSTRUMENTS[gmProg];
+      const trackName = (t.name || (gm as { name?: string })?.name || `MIDI Track ${i + 1}`).slice(0, 48);
+      const channelIndex = nextTracks.length;
+      const id = `midi_${importId}_${i}`;
+
+      const pitchCounts = new Map<number, number>();
+      t.notes.forEach(n => pitchCounts.set(n.midi, (pitchCounts.get(n.midi) || 0) + 1));
+      let repPitch = 60;
+      let repCount = -1;
+      pitchCounts.forEach((count, pitch) => {
+        if (count > repCount) { repCount = count; repPitch = pitch; }
+      });
+      const repName = midiNoteName(Math.max(21, Math.min(108, repPitch)));
+      const avgVel = Math.round(
+        (t.notes.reduce((sum, note) => sum + note.velocity, 0) / Math.max(1, t.notes.length)) * 127
+      );
+
+      const track: TrackDef = {
+        id,
+        name: trackName,
+        category: 'SoundFont Instruments',
+        type: 'soundfont',
+        note: repName,
+        color: CHANNEL_COLORS[channelIndex % CHANNEL_COLORS.length],
+        presets: MIDI_NOTE_PRESETS,
+        defaultGmId: gmProg
+      };
+
+      nextTracks.push(track);
+      nextGrid[id] = emptyRow(importedStepCount);
+      nextGm[id] = gmProg;
+      nextEngine[id] = 'soundfont';
+      nextPresets[id] = repName;
+      nextVel[id] = Math.max(1, Math.min(127, avgVel));
+      nextSelected.push(id);
+      programsToLoad.add(gmProg);
+
+      const quantized = t.notes.map((note, idx) => {
+        const globalStep = Math.round(note.ticks / ticksPer16th);
+        const durationSteps = Math.max(1, Math.round(note.durationTicks / ticksPer16th));
+        return {
+          globalStep,
+          pitch: Math.max(0, Math.min(127, note.midi)),
+          durationSteps,
+          velocity: Math.max(1, Math.min(127, Math.round(note.velocity * 127))),
+          idx
+        };
+      }).filter(q => q.globalStep < importedStepCount)
+        .sort((a, b) => a.globalStep - b.globalStep || a.pitch - b.pitch);
+
+      quantized.forEach(q => {
+        nextGrid[id][q.globalStep] = true;
+      });
+
+      const numBlocks = Math.ceil(importedStepCount / ENDLESS_BLOCK_STEPS);
+      for (let b = 0; b < numBlocks; b++) {
+        const blockStart = b * ENDLESS_BLOCK_STEPS;
+        const blockLen = Math.min(ENDLESS_BLOCK_STEPS, importedStepCount - blockStart);
+        const blockNotes = quantized.filter(
+          q => q.globalStep >= blockStart && q.globalStep < blockStart + blockLen
+        );
+        if (blockNotes.length === 0) continue;
+        nextClips.push({
+          id: `clip_${importId}_${i}_${b}`,
+          trackId: id,
+          name: `${trackName} · ${b + 1}/${numBlocks}`,
+          start: blockStart,
+          length: blockLen,
+          notes: blockNotes.map(q => ({
+            id: `n_${importId}_${i}_${b}_${q.idx}`,
+            pitch: q.pitch,
+            start: q.globalStep - blockStart,
+            duration: Math.min(q.durationSteps, blockLen - (q.globalStep - blockStart) + 8),
+            velocity: q.velocity
+          }))
+        });
+      }
+    });
+
+    if (nextTracks.length === 0) return false;
+
+    setTracks(nextTracks);
+    setArrangementClips(nextClips);
+    setActiveView('arrangement');
+    stepCountRef.current = importedStepCount;
+    setStepCount(importedStepCount);
+    setGrid(nextGrid);
+    setTrackGmInstruments(nextGm);
+    setTrackEngine(nextEngine);
+    setTrackPresets(nextPresets);
+    setTrackVelocity(nextVel);
+    setSelectedTracks(nextSelected);
+    setHoldTones({});
+    setMutedTracks({});
+    setSoloTracks({});
+    programsToLoad.forEach(program => loadSoundFontInstrument(program));
+
+    const totalBars = Math.ceil(importedStepCount / STEPS_PER_BAR);
+    showToast(importWasTruncated
+      ? `${fileName} (full song is ${rawStepCount} steps — loaded first ${importedStepCount})`
+      : `${fileName} (full song · ${totalBars} bars · ${nextClips.length} blocks)`);
+    return true;
+  };
+
   const handleMidiImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1220,149 +1376,17 @@ export default function SequencerWorkstation() {
         const text = await file.text();
         const data = JSON.parse(text);
         if (data.app === 'snuzy-workstation') {
-          if (typeof data.bpm === 'number') setBpm(data.bpm);
-          if (typeof data.stepCount === 'number') {
-            const importedStepCount = normalizeStepCount(data.stepCount);
-            stepCountRef.current = importedStepCount;
-            setStepCount(importedStepCount);
-          }
-          if (Array.isArray(data.tracks) && data.tracks.length > 0) setTracks(data.tracks);
-          if (data.grid) setGrid(data.grid);
-          if (data.trackPresets) setTrackPresets(data.trackPresets);
-          if (data.trackGmInstruments) setTrackGmInstruments(data.trackGmInstruments);
-          if (data.trackEngine) setTrackEngine(data.trackEngine);
-          if (data.trackVelocity) setTrackVelocity(data.trackVelocity);
-          if (data.selectedTracks) setSelectedTracks(data.selectedTracks);
-          if (data.holdTones) setHoldTones(data.holdTones);
-          if (data.mutedTracks) setMutedTracks(data.mutedTracks);
-          if (data.soloTracks) setSoloTracks(data.soloTracks);
-          if (Array.isArray(data.arrangementClips)) {
-            setArrangementClips(data.arrangementClips);
-            setActiveView('arrangement');
-          } else {
-            setActiveView('steps');
-          }
-
-          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-          setMidiToast({ visible: true, fileName: `${file.name} (Full Project Restored)` });
-          toastTimerRef.current = setTimeout(() => {
-            setMidiToast(prev => ({ ...prev, visible: false }));
-          }, 3500);
+          applyProjectData(data, `${file.name} (Full Project Restored)`);
           return;
         }
       }
 
       const buffer = await file.arrayBuffer();
       const imported = new Midi(buffer);
-
-      if (isPlaying) stopTransport();
-      stepColCacheRef.current = [];
-
-      const ppq = imported.header.ppq || 480;
-      const ticksPer16th = ppq / 4;
-      const lastNoteEndTicks = imported.tracks.reduce((latest, track) => (
-        track.notes.reduce((trackLatest, note) => (
-          Math.max(trackLatest, note.ticks + note.durationTicks)
-        ), latest)
-      ), 0);
-      const sourceStepCount = Math.ceil(lastNoteEndTicks / ticksPer16th);
-      const importedStepCount = normalizeStepCount(sourceStepCount);
-      const importWasTruncated = sourceStepCount > importedStepCount;
-
-      if (imported.header.tempos && imported.header.tempos.length > 0) {
-        const fileBpm = Math.round(imported.header.tempos[0].bpm);
-        if (fileBpm >= 60 && fileBpm <= 180) setBpm(fileBpm);
-      }
-
-      const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
-      const nextTracks: TrackDef[] = [];
-      const nextGrid: Record<string, boolean[]> = {};
-      const nextGm: Record<string, number> = {};
-      const nextEngine: Record<string, TrackEngine> = {};
-      const nextPresets: Record<string, string> = {};
-      const nextVel: Record<string, number> = {};
-      const nextSelected: string[] = [];
-      const programsToLoad = new Set<number>();
-      const importId = Date.now();
-
-      instrumentTracks.forEach((t, i) => {
-        const gmProg = typeof t.instrument?.number === 'number'
-          ? Math.max(0, Math.min(127, t.instrument.number))
-          : 0;
-        const gm = GM_INSTRUMENTS[gmProg];
-        const notesByPitch = new Map<number, typeof t.notes>();
-        t.notes.forEach(n => {
-          const stepIndex = Math.round(n.ticks / ticksPer16th);
-          if (stepIndex >= importedStepCount) return;
-          const pitchNotes = notesByPitch.get(n.midi) || [];
-          pitchNotes.push(n);
-          notesByPitch.set(n.midi, pitchNotes);
-        });
-
-        [...notesByPitch.entries()].sort(([a], [b]) => a - b).forEach(([pitch, pitchNotes]) => {
-          const noteName = midiNoteName(Math.max(24, Math.min(95, pitch)));
-          const id = `midi_${importId}_${i}_${pitch}`;
-          const velocity = Math.round(
-            (pitchNotes.reduce((sum, note) => sum + note.velocity, 0) / pitchNotes.length) * 127
-          );
-          const channelIndex = nextTracks.length;
-          const trackName = t.name || gm?.name || `MIDI Track ${i + 1}`;
-          const track: TrackDef = {
-            id,
-            name: `${trackName} · ${noteName}`,
-            category: 'SoundFont Instruments',
-            type: 'soundfont',
-            note: noteName,
-            color: CHANNEL_COLORS[channelIndex % CHANNEL_COLORS.length],
-            presets: MIDI_NOTE_PRESETS,
-            defaultGmId: gmProg
-          };
-
-          nextTracks.push(track);
-          nextGrid[id] = emptyRow(importedStepCount);
-          pitchNotes.forEach(note => {
-            const stepIndex = Math.round(note.ticks / ticksPer16th);
-            nextGrid[id][stepIndex] = true;
-          });
-          nextGm[id] = gmProg;
-          nextEngine[id] = 'soundfont';
-          nextPresets[id] = noteName;
-          nextVel[id] = Math.max(1, Math.min(127, velocity));
-          nextSelected.push(id);
-          programsToLoad.add(gmProg);
-        });
-      });
-
-      if (nextTracks.length === 0) {
+      const ok = applyMidiObject(imported, file.name);
+      if (!ok) {
         alert('No notes found in that MIDI file.');
-        return;
       }
-
-      setTracks(nextTracks);
-      setActiveView('steps');
-      stepCountRef.current = importedStepCount;
-      setStepCount(importedStepCount);
-      setGrid(nextGrid);
-      setTrackGmInstruments(nextGm);
-      setTrackEngine(nextEngine);
-      setTrackPresets(nextPresets);
-      setTrackVelocity(nextVel);
-      setSelectedTracks(nextSelected);
-      setHoldTones({});
-      setMutedTracks({});
-      setSoloTracks({});
-      programsToLoad.forEach(program => loadSoundFontInstrument(program));
-
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      setMidiToast({
-        visible: true,
-        fileName: importWasTruncated
-          ? `${file.name} (loaded first ${importedStepCount} of ${sourceStepCount} steps)`
-          : file.name
-      });
-      toastTimerRef.current = setTimeout(() => {
-        setMidiToast(prev => ({ ...prev, visible: false }));
-      }, 3000);
     } catch (err: any) {
       console.error(err);
       alert('Failed to parse file: ' + (err?.message || err));
@@ -1609,7 +1633,7 @@ export default function SequencerWorkstation() {
       </div>
 
       {activeView === 'arrangement' ? (
-        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={setArrangementClips} />
+        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={setArrangementClips} onExtend={extendTimeline} />
       ) : <>
       <div className="timeline-toolbar">
         <div>
