@@ -601,15 +601,22 @@ export default function SequencerWorkstation() {
   const trackPresetsRef = useRef(trackPresets);
   useEffect(() => { trackPresetsRef.current = trackPresets; }, [trackPresets]);
 
-  const [grid, setGrid] = useState<Record<string, boolean[]>>(() => {
-    const initial: Record<string, boolean[]> = {};
-    Object.entries(SHOWCASE_SONG.gridSteps as Record<string, number[]>).forEach(([id, steps]) => {
-      const row = emptyRow(SHOWCASE_SONG.stepCount);
-      steps.forEach(s => { if (s < row.length) row[s] = true; });
-      initial[id] = row;
+  // Unified song model: arrangement clips are the single source of truth and
+  // the step grid is a live simplified projection of them — a pad lights up
+  // wherever a note starts on that step. Editing pads writes through to clips.
+  const grid: Record<string, boolean[]> = React.useMemo(() => {
+    const projected: Record<string, boolean[]> = {};
+    tracks.forEach(t => { projected[t.id] = emptyRow(stepCount); });
+    arrangementClips.forEach(clip => {
+      const row = projected[clip.trackId];
+      if (!row) return;
+      clip.notes.forEach(n => {
+        const s = clip.start + n.start;
+        if (s >= 0 && s < stepCount) row[s] = true;
+      });
     });
-    return initial;
-  });
+    return projected;
+  }, [tracks, arrangementClips, stepCount]);
 
   const trackChainsRef = useRef<Record<string, { gain: Tone.Gain; pan: Tone.Panner }>>({});
   const trackSynthsRef = useRef<Record<string, { inst: any; type: SynthType }>>({});
@@ -621,7 +628,7 @@ export default function SequencerWorkstation() {
   const repeatIdRef = useRef<number | null>(null);
   const stepRef = useRef<number>(0);
   const holdTonesRef = useRef(holdTones);
-  const gridRef = useRef(grid);
+  const gridRef = useRef<Record<string, boolean[]>>({});
   const selectedTracksRef = useRef(selectedTracks);
   const tracksRef = useRef(tracks);
   const trackEngineRef = useRef(trackEngine);
@@ -1061,10 +1068,24 @@ export default function SequencerWorkstation() {
           if (!channelAudible(track.id)) continue;
           if (!(currentGrid[track.id]?.[step] || currentHolds[track.id])) continue;
 
-          const currentNote = getTrackActiveNote(track);
-          const velocity = (trackVelocityRef.current[track.id] ?? 100) / 127;
-
-          fireTrackSound(track, currentNote, time, velocity);
+          // Same real block notes the arrangement plays — identical sound in
+          // both views. Held tracks with no note here drone the track pitch.
+          let firedReal = false;
+          arrangementClipsRef.current.forEach(clip => {
+            if (clip.trackId !== track.id) return;
+            const local = step - clip.start;
+            if (local < 0 || local >= clip.length) return;
+            clip.notes.filter(note => note.start === local).forEach(note => {
+              const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
+              fireTrackSound(track, midiNoteName(note.pitch), time, note.velocity / 127, duration, clip.gmId);
+              firedReal = true;
+            });
+          });
+          if (!firedReal) {
+            const currentNote = getTrackActiveNote(track);
+            const velocity = (trackVelocityRef.current[track.id] ?? 100) / 127;
+            fireTrackSound(track, currentNote, time, velocity);
+          }
         }
 
         if (activeViewRef.current === 'arrangement') {
@@ -1153,15 +1174,46 @@ export default function SequencerWorkstation() {
     }
   };
 
+  // Step pads write straight through to arrangement clips: toggling a lit
+  // pad removes the note(s) starting there, toggling a dark one adds a note
+  // (creating a 1-bar block if no block covers that step yet).
   const togglePad = (trackId: string, stepIdx: number) => {
     // Release dropdown focus so follow-playhead resumes after menu use.
     const focused = document.activeElement as HTMLElement | null;
     if (focused && focused.tagName === 'SELECT') focused.blur();
     pushHistory();
-    setGrid(prev => {
-      const row = [...(prev[trackId] || emptyRow(stepCount))];
-      row[stepIdx] = !row[stepIdx];
-      return { ...prev, [trackId]: row };
+    const track = tracksRef.current.find(t => t.id === trackId);
+    const pitch = track ? getMidiPitchForTrack(track) : 60;
+    const vel = trackVelocityRef.current[trackId] ?? 100;
+    const stamp = Date.now();
+    const rnd = Math.floor(Math.random() * 1000000);
+    setArrangementClips(prev => {
+      const covering = prev.filter(c => c.trackId === trackId && stepIdx >= c.start && stepIdx < c.start + c.length);
+      const lit = covering.some(c => c.notes.some(n => n.start === stepIdx - c.start));
+      if (lit) {
+        return prev.map(c => {
+          if (c.trackId !== trackId || stepIdx < c.start || stepIdx >= c.start + c.length) return c;
+          const local = stepIdx - c.start;
+          const notes = c.notes.filter(n => n.start !== local);
+          return notes.length === c.notes.length ? c : { ...c, notes };
+        });
+      }
+      if (covering.length > 0) {
+        const target = covering[0];
+        const local = stepIdx - target.start;
+        return prev.map(c => (c.id === target.id
+          ? { ...c, notes: [...c.notes, { id: `n_${stamp}_${rnd}`, pitch, start: local, duration: 1, velocity: vel }] }
+          : c));
+      }
+      const start = Math.min(Math.floor(stepIdx / 16) * 16, Math.max(0, stepCountRef.current - 16));
+      const length = Math.min(16, stepCountRef.current - start);
+      const fresh: InstrumentClip = {
+        id: `clip_${stamp}_${rnd}`, trackId,
+        name: `Pattern ${prev.filter(c => c.trackId === trackId).length + 1}`,
+        start, length,
+        notes: [{ id: `n_${stamp}_${rnd}`, pitch, start: stepIdx - start, duration: 1, velocity: vel }]
+      };
+      return [...prev, fresh];
     });
   };
 
@@ -1185,18 +1237,10 @@ export default function SequencerWorkstation() {
   };
 
   const resizeGrid = (nextSteps: number) => {
+    // Clips carry the music, so resizing only moves the timeline window —
+    // the projected grid follows automatically.
     nextSteps = normalizeStepCount(nextSteps);
     if (nextSteps !== stepCountRef.current) pushHistory();
-    setGrid(prev => {
-      const next: Record<string, boolean[]> = {};
-      Object.keys(prev).forEach(id => {
-        const row = emptyRow(nextSteps);
-        const src = prev[id] || [];
-        for (let i = 0; i < Math.min(src.length, nextSteps); i++) row[i] = src[i];
-        next[id] = row;
-      });
-      return next;
-    });
     stepCountRef.current = nextSteps;
     setStepCount(nextSteps);
   };
@@ -1209,11 +1253,7 @@ export default function SequencerWorkstation() {
 
   const clearGrid = () => {
     pushHistory();
-    const empty: Record<string, boolean[]> = {};
-    tracks.forEach(t => {
-      empty[t.id] = emptyRow(stepCount);
-    });
-    setGrid(empty);
+    setArrangementClips([]);
   };
 
   const addChannel = (template?: TrackDef) => {
@@ -1238,7 +1278,6 @@ export default function SequencerWorkstation() {
     const gmId = defaultGmForTrack(track);
     pushHistory();
     setTracks(prev => [...prev, track]);
-    setGrid(prev => ({ ...prev, [id]: emptyRow(stepCount) }));
     setSelectedTracks(prev => [...prev, id]);
     setTrackPresets(prev => ({ ...prev, [id]: track.type === 'soundfont' ? track.note : (track.presets[0]?.id || 'C4') }));
     setTrackEngine(prev => ({ ...prev, [id]: 'soundfont' }));
@@ -1257,11 +1296,6 @@ export default function SequencerWorkstation() {
     setTracks(prev => prev.filter(t => t.id !== trackId));
     setSelectedTracks(prev => prev.filter(id => id !== trackId));
     setArrangementClips(prev => prev.filter(clip => clip.trackId !== trackId));
-    setGrid(prev => {
-      const next = { ...prev };
-      delete next[trackId];
-      return next;
-    });
     setHoldTones(prev => {
       const next = { ...prev };
       delete next[trackId];
@@ -1483,7 +1517,6 @@ export default function SequencerWorkstation() {
         bpm,
         stepCount,
         tracks,
-        grid,
         trackPresets,
         trackGmInstruments,
         trackEngine,
@@ -1616,7 +1649,7 @@ export default function SequencerWorkstation() {
     stepCountRef.current = snap.stepCount;
     setStepCount(snap.stepCount);
     setTracks(snap.tracks);
-    setGrid(snap.grid);
+    // No setGrid: the projected grid rebuilds itself from tracks + clips.
     setTrackPresets(snap.trackPresets);
     setTrackGmInstruments(snap.trackGmInstruments);
     setTrackEngine(snap.trackEngine);
@@ -1709,7 +1742,6 @@ export default function SequencerWorkstation() {
       setStepCount(importedStepCount);
     }
     if (Array.isArray(data.tracks) && data.tracks.length > 0) setTracks(data.tracks);
-    if (data.grid) setGrid(data.grid);
     if (data.trackPresets) setTrackPresets(data.trackPresets);
     if (data.trackGmInstruments) setTrackGmInstruments(data.trackGmInstruments);
     if (data.trackEngine) setTrackEngine(data.trackEngine);
@@ -1735,6 +1767,30 @@ export default function SequencerWorkstation() {
     if (Array.isArray(data.arrangementClips)) {
       setArrangementClips(data.arrangementClips);
       setActiveView('arrangement');
+    } else if (data.grid && Array.isArray(data.tracks)) {
+      // Legacy step-only project: fold each grid row into one full-length clip.
+      const len = normalizeStepCount(typeof data.stepCount === 'number' ? data.stepCount : DEFAULT_STEPS);
+      const stamp = Date.now();
+      const legacy: InstrumentClip[] = [];
+      (data.tracks as TrackDef[]).forEach((t, i) => {
+        const row: boolean[] = (data.grid as Record<string, boolean[]>)[t.id] || [];
+        const steps: number[] = [];
+        for (let s = 0; s < Math.min(row.length, len); s++) if (row[s]) steps.push(s);
+        if (steps.length === 0) return;
+        let pitch = 60;
+        try {
+          const note = t.note && !t.note.endsWith('n') ? t.note : 'C4';
+          pitch = Math.round(Tone.Frequency(note).toMidi());
+        } catch {}
+        const vel = (data.trackVelocity as Record<string, number> | undefined)?.[t.id] ?? 100;
+        legacy.push({
+          id: `clip_legacy_${stamp}_${i}`, trackId: t.id, name: `${t.name} (imported)`,
+          start: 0, length: len,
+          notes: steps.map((s, k) => ({ id: `n_legacy_${stamp}_${i}_${k}`, pitch, start: s, duration: 1, velocity: vel }))
+        });
+      });
+      setArrangementClips(legacy);
+      setActiveView('steps');
     } else {
       setActiveView('steps');
     }
@@ -1783,7 +1839,6 @@ export default function SequencerWorkstation() {
 
     const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
     const nextTracks: TrackDef[] = [];
-    const nextGrid: Record<string, boolean[]> = {};
     const nextGm: Record<string, number> = {};
     const nextEngine: Record<string, TrackEngine> = {};
     const nextPresets: Record<string, string> = {};
@@ -1826,7 +1881,6 @@ export default function SequencerWorkstation() {
       };
 
       nextTracks.push(track);
-      nextGrid[id] = emptyRow(importedStepCount);
       nextGm[id] = gmProg;
       nextEngine[id] = 'soundfont';
       nextPresets[id] = repName;
@@ -1846,10 +1900,6 @@ export default function SequencerWorkstation() {
         };
       }).filter(q => q.globalStep < importedStepCount)
         .sort((a, b) => a.globalStep - b.globalStep || a.pitch - b.pitch);
-
-      quantized.forEach(q => {
-        nextGrid[id][q.globalStep] = true;
-      });
 
       const numBlocks = Math.ceil(importedStepCount / ENDLESS_BLOCK_STEPS);
       for (let b = 0; b < numBlocks; b++) {
@@ -1883,7 +1933,6 @@ export default function SequencerWorkstation() {
     setActiveView('arrangement');
     stepCountRef.current = importedStepCount;
     setStepCount(importedStepCount);
-    setGrid(nextGrid);
     setTrackGmInstruments(nextGm);
     setTrackEngine(nextEngine);
     setTrackPresets(nextPresets);
