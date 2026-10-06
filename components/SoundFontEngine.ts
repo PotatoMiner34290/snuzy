@@ -249,6 +249,7 @@ export interface InstrumentStatus {
  */
 export class SoundFontPlayer {
   private samplers: Map<number, Tone.Sampler> = new Map();
+  private sampleMaps: Map<number, Record<string, string>> = new Map();
   private loadingStates: Map<number, LoadingState> = new Map();
   private loadingErrors: Map<number, string> = new Map();
   private loadPromises: Map<number, Promise<void>> = new Map();
@@ -352,6 +353,10 @@ export class SoundFontPlayer {
 
       if (this.disposed) return;
 
+      // Keep the parsed note → sample map so per-track samplers can be
+      // created later (for per-track volume/pan) without re-fetching.
+      this.sampleMaps.set(instrumentId, samples);
+
       // Create a Tone.Sampler with the parsed samples
       await new Promise<void>((resolve, reject) => {
         try {
@@ -382,6 +387,48 @@ export class SoundFontPlayer {
       console.error(`[SoundFontPlayer] Failed to load "${instrument.name}":`, errMsg);
       throw err;
     }
+  }
+
+  /**
+   * Create a dedicated sampler for one mixer track, routed to that track's
+   * own channel strip (volume/pan). Shares the already-fetched sample map,
+   * so no extra network traffic — samples decode from memory.
+   * Resolves to null if the instrument hasn't been fetched yet.
+   */
+  async createTrackSampler(
+    instrumentId: number,
+    destination: Tone.ToneAudioNode
+  ): Promise<Tone.Sampler | null> {
+    if (this.disposed) return null;
+    let samples = this.sampleMaps.get(instrumentId);
+    if (!samples) {
+      try {
+        await this.loadInstrument(instrumentId);
+      } catch {
+        return null;
+      }
+      if (this.disposed) return null;
+      samples = this.sampleMaps.get(instrumentId);
+      if (!samples) return null;
+    }
+    return new Promise<Tone.Sampler | null>((resolve) => {
+      try {
+        const sampler = new Tone.Sampler({
+          urls: samples,
+          onload: () => {
+            if (this.disposed) {
+              sampler.dispose();
+              resolve(null);
+              return;
+            }
+            resolve(sampler);
+          },
+          onerror: () => resolve(null),
+        }).connect(destination);
+      } catch {
+        resolve(null);
+      }
+    });
   }
 
   /**
@@ -472,6 +519,7 @@ export class SoundFontPlayer {
       try { sampler.dispose(); } catch {}
     });
     this.samplers.clear();
+    this.sampleMaps.clear();
     this.loadingStates.clear();
     this.loadingErrors.clear();
     this.loadPromises.clear();

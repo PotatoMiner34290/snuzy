@@ -40,7 +40,10 @@ const uid = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toStrin
 export default function ArrangementView({ tracks, stepCount, clips, setClips, onExtend }: Props) {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(clips[0]?.id ?? null);
   const [noteLength, setNoteLength] = useState(1);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const selectedClip = clips.find(clip => clip.id === selectedClipId) ?? null;
+  const selectedNote = selectedClip?.notes.find(note => note.id === selectedNoteId) ?? null;
+  React.useEffect(() => { setSelectedNoteId(null); }, [selectedClipId]);
   const bars = Math.ceil(stepCount / 16);
   const pxPerStep = stepCount > 512 ? 8 : stepCount > 256 ? 12 : stepCount > 128 ? 18 : 28;
   const timelineWidth = Math.max(900, stepCount * pxPerStep);
@@ -98,13 +101,38 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
   const toggleNote = (pitch: number, start: number) => {
     if (!selectedClip) return;
     const existing = selectedClip.notes.find(note => note.pitch === pitch && note.start === start);
-    const notes = existing
-      ? selectedClip.notes.filter(note => note.id !== existing.id)
-      : [...selectedClip.notes, {
-          id: uid('note'), pitch, start,
-          duration: Math.min(noteLength, selectedClip.length - start), velocity: 100
-        }];
-    updateClip(selectedClip.id, { notes });
+    if (existing) {
+      if (selectedNoteId === existing.id) {
+        // Second click on the selected note deletes it.
+        updateClip(selectedClip.id, { notes: selectedClip.notes.filter(note => note.id !== existing.id) });
+        setSelectedNoteId(null);
+      } else {
+        // First click selects it so velocity can be edited below.
+        setSelectedNoteId(existing.id);
+      }
+      return;
+    }
+    const note = {
+      id: uid('note'), pitch, start,
+      duration: Math.min(noteLength, selectedClip.length - start), velocity: 100
+    };
+    updateClip(selectedClip.id, { notes: [...selectedClip.notes, note] });
+    setSelectedNoteId(note.id);
+  };
+
+  const setSelectedNoteVelocity = (velocity: number) => {
+    if (!selectedClip || !selectedNote) return;
+    updateClip(selectedClip.id, {
+      notes: selectedClip.notes.map(note =>
+        note.id === selectedNote.id ? { ...note, velocity: Math.max(1, Math.min(127, velocity)) } : note
+      )
+    });
+  };
+
+  const deleteSelectedNote = () => {
+    if (!selectedClip || !selectedNote) return;
+    updateClip(selectedClip.id, { notes: selectedClip.notes.filter(note => note.id !== selectedNote.id) });
+    setSelectedNoteId(null);
   };
 
   return (
@@ -164,6 +192,15 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
             <label>Start <input type="number" min={0} max={stepCount - selectedClip.length} value={selectedClip.start} onChange={event => updateClip(selectedClip.id, { start: Math.max(0, Math.min(stepCount - selectedClip.length, Number(event.target.value))) })} /></label>
             <label>Length <select value={selectedClip.length} onChange={event => updateClip(selectedClip.id, { length: Number(event.target.value), notes: selectedClip.notes.filter(note => note.start < Number(event.target.value)) })}>{CLIP_LENGTH_OPTIONS.filter(length => length <= stepCount).map(length => <option key={length}>{length}</option>)}</select></label>
             <label>Draw <select value={noteLength} onChange={event => setNoteLength(Number(event.target.value))}>{[1, 2, 4, 8].map(length => <option key={length} value={length}>{length} step{length > 1 ? 's' : ''}</option>)}</select></label>
+            {selectedNote && (
+              <>
+                <label title="Velocity of the selected note (click a note to select, click again to delete)">
+                  Vel {selectedNote.velocity}
+                  <input type="range" min={1} max={127} value={selectedNote.velocity} onChange={event => setSelectedNoteVelocity(Number(event.target.value))} style={{ width: 80, accentColor: '#00e5ff' }} />
+                </label>
+                <button onClick={deleteSelectedNote} title="Delete the selected note"><Trash2 size={14} /></button>
+              </>
+            )}
             <button onClick={() => duplicateClip(selectedClip)}><Copy size={14} /> Duplicate</button>
             <button onClick={() => splitClip(selectedClip)} title="Split this block into two endless blocks">Split</button>
             <button className="danger" onClick={() => { setClips(previous => previous.filter(clip => clip.id !== selectedClip.id)); setSelectedClipId(null); }}><Trash2 size={14} /> Delete</button>
@@ -174,7 +211,8 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
                 <div key={`key-${pitch}`} className={`piano-key ${NOTE_NAMES[pitch % 12].includes('#') ? 'black' : ''}`}>{pitchName(pitch)}</div>,
                 ...Array.from({ length: selectedClip.length }, (_, step) => {
                   const note = selectedClip.notes.find(item => item.pitch === pitch && item.start === step);
-                  return <button key={`${pitch}-${step}`} className={`piano-cell ${step % 4 === 0 ? 'beat' : ''} ${note ? 'has-note' : ''}`} onClick={() => toggleNote(pitch, step)} title={`${pitchName(pitch)} · step ${step + 1}`}>{note && <span style={{ width: `${note.duration * 28 - 2}px` }} />}</button>;
+                  const isSelected = !!note && note.id === selectedNoteId;
+                  return <button key={`${pitch}-${step}`} className={`piano-cell ${step % 4 === 0 ? 'beat' : ''} ${note ? 'has-note' : ''}`} onClick={() => toggleNote(pitch, step)} title={note ? `${pitchName(pitch)} · step ${step + 1} · vel ${note.velocity}` : `${pitchName(pitch)} · step ${step + 1}`} style={isSelected ? { boxShadow: 'inset 0 0 0 2px #fff' } : undefined}>{note && <span style={{ width: `${note.duration * 28 - 2}px`, opacity: 0.45 + 0.55 * (note.velocity / 127) }} />}</button>;
                 })
               ])}
             </div>

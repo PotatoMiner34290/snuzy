@@ -352,6 +352,157 @@ function midiNoteName(midi: number): string {
   return `${n}${oct}`;
 }
 
+// Mixer helpers: 0-100 volume slider → gain (perceptual curve), -50..50 pan → -1..1.
+function volToGain(v: number): number {
+  const clamped = Math.max(0, Math.min(100, v)) / 100;
+  return Math.pow(clamped, 1.5);
+}
+
+function panToPan(p: number): number {
+  return Math.max(-1, Math.min(1, p / 50));
+}
+
+// One Tone synth instance per track (so every track owns its mixer strip).
+// Settings mirror the original shared-instrument setup.
+function createToneInstrument(type: SynthType): any {
+  switch (type) {
+    case 'membrane':
+      return new Tone.MembraneSynth({
+        pitchDecay: 0.05, octaves: 6, oscillator: { type: 'sine' },
+        envelope: { attack: 0.001, decay: 0.35, sustain: 0.01, release: 0.35 }
+      });
+    case 'sub808': {
+      const inst = new Tone.MembraneSynth({
+        pitchDecay: 0.08, octaves: 3, oscillator: { type: 'sine' },
+        envelope: { attack: 0.02, decay: 0.5, sustain: 0.2, release: 0.5 }
+      });
+      inst.volume.value = -1;
+      return inst;
+    }
+    case 'noise':
+      return new Tone.NoiseSynth({
+        noise: { type: 'white' },
+        envelope: { attack: 0.001, decay: 0.18, sustain: 0 }
+      });
+    case 'synth':
+      return new Tone.Synth({
+        oscillator: { type: 'triangle' },
+        envelope: { attack: 0.01, decay: 0.12, sustain: 0, release: 0.08 }
+      });
+    case 'metal': {
+      const inst = new Tone.MetalSynth({
+        envelope: { attack: 0.001, decay: 0.04, release: 0.04 },
+        harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5
+      });
+      inst.frequency.value = 250;
+      inst.volume.value = -8;
+      return inst;
+    }
+    case 'metal_open': {
+      const inst = new Tone.MetalSynth({
+        envelope: { attack: 0.005, decay: 0.25, release: 0.2 },
+        harmonicity: 4.8, modulationIndex: 28, resonance: 3500, octaves: 1.2
+      });
+      inst.frequency.value = 220;
+      inst.volume.value = -8;
+      return inst;
+    }
+    case 'tom':
+      return new Tone.MembraneSynth({
+        pitchDecay: 0.06, octaves: 4, oscillator: { type: 'sine' },
+        envelope: { attack: 0.002, decay: 0.25, sustain: 0.01, release: 0.2 }
+      });
+    case 'rim': {
+      const inst = new Tone.Synth({
+        oscillator: { type: 'square' },
+        envelope: { attack: 0.001, decay: 0.03, sustain: 0, release: 0.03 }
+      });
+      inst.volume.value = -4;
+      return inst;
+    }
+    case 'cowbell': {
+      const inst = new Tone.MetalSynth({
+        envelope: { attack: 0.001, decay: 0.1, release: 0.08 },
+        harmonicity: 1.4, modulationIndex: 12, resonance: 2500, octaves: 0.5
+      });
+      inst.frequency.value = 540;
+      inst.volume.value = -6;
+      return inst;
+    }
+    case 'fm': {
+      const inst = new Tone.FMSynth({
+        harmonicity: 1, modulationIndex: 2, oscillator: { type: 'sine' },
+        envelope: { attack: 0.01, decay: 0.25, sustain: 0.3, release: 0.3 }
+      });
+      inst.volume.value = -3;
+      return inst;
+    }
+    case 'acid': {
+      const inst = new Tone.PolySynth(Tone.MonoSynth, {
+        oscillator: { type: 'sawtooth' },
+        filter: { Q: 6, type: 'lowpass' },
+        envelope: { attack: 0.01, decay: 0.18, sustain: 0.2, release: 0.2 },
+        filterEnvelope: { attack: 0.02, decay: 0.12, sustain: 0.1, release: 0.15, baseFrequency: 80, octaves: 4 }
+      });
+      inst.maxPolyphony = 8;
+      inst.volume.value = -3;
+      return inst;
+    }
+    case 'poly': {
+      const inst = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'sawtooth' },
+        envelope: { attack: 0.02, decay: 0.15, sustain: 0.2, release: 0.3 }
+      });
+      inst.maxPolyphony = 8;
+      inst.volume.value = -6;
+      return inst;
+    }
+    case 'pluck': {
+      const inst = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'triangle' },
+        envelope: { attack: 0.005, decay: 0.12, sustain: 0, release: 0.1 }
+      });
+      inst.maxPolyphony = 8;
+      inst.volume.value = -3;
+      return inst;
+    }
+    case 'am': {
+      const inst = new Tone.PolySynth(Tone.AMSynth, {
+        harmonicity: 2, oscillator: { type: 'sine' },
+        envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 0.4 }
+      });
+      inst.maxPolyphony = 8;
+      inst.volume.value = -6;
+      return inst;
+    }
+    case 'space': {
+      const inst = new Tone.PolySynth(Tone.FMSynth, {
+        harmonicity: 3, modulationIndex: 10, oscillator: { type: 'triangle' },
+        envelope: { attack: 0.1, decay: 0.35, sustain: 0.5, release: 0.5 }
+      });
+      inst.maxPolyphony = 8;
+      inst.volume.value = -8;
+      return inst;
+    }
+    case 'wobble': {
+      const inst = new Tone.PolySynth(Tone.MonoSynth, {
+        oscillator: { type: 'square' },
+        filter: { Q: 4, type: 'lowpass' },
+        envelope: { attack: 0.03, decay: 0.18, sustain: 0.4, release: 0.25 },
+        filterEnvelope: { attack: 0.08, decay: 0.15, sustain: 0.2, release: 0.2, baseFrequency: 120, octaves: 3 }
+      });
+      inst.maxPolyphony = 8;
+      inst.volume.value = -4;
+      return inst;
+    }
+    default:
+      return new Tone.Synth({
+        oscillator: { type: 'triangle' },
+        envelope: { attack: 0.01, decay: 0.12, sustain: 0, release: 0.08 }
+      });
+  }
+}
+
 const selectStyle: React.CSSProperties = {
   background: '#131722',
   border: '1px solid #2e384d',
@@ -386,6 +537,15 @@ export default function SequencerWorkstation() {
 
   const [trackVelocity, setTrackVelocity] = useState<Record<string, number>>(() => ({ ...(SHOWCASE_SONG.velocity as Record<string, number>) }));
 
+  // Mixer: per-track volume (0-100, default 100) and pan (-50..50, default 0).
+  const [trackVolume, setTrackVolume] = useState<Record<string, number>>(() => (
+    Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 100]))
+  ));
+  const [trackPan, setTrackPan] = useState<Record<string, number>>(() => (
+    Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 0]))
+  ));
+  const [tapHint, setTapHint] = useState<boolean>(true);
+
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
   const trackPresetsRef = useRef(trackPresets);
@@ -401,7 +561,11 @@ export default function SequencerWorkstation() {
     return initial;
   });
 
-  const instrumentsRef = useRef<Record<string, any>>({});
+  const trackChainsRef = useRef<Record<string, { gain: Tone.Gain; pan: Tone.Panner }>>({});
+  const trackSynthsRef = useRef<Record<string, { inst: any; type: SynthType }>>({});
+  const trackSamplersRef = useRef<Record<string, Tone.Sampler>>({});
+  const trackSamplerGmRef = useRef<Record<string, number>>({});
+  const isPlayingRef = useRef<boolean>(false);
   const repeatIdRef = useRef<number | null>(null);
   const stepRef = useRef<number>(0);
   const holdTonesRef = useRef(holdTones);
@@ -410,6 +574,9 @@ export default function SequencerWorkstation() {
   const tracksRef = useRef(tracks);
   const trackEngineRef = useRef(trackEngine);
   const trackVelocityRef = useRef(trackVelocity);
+  const trackVolumeRef = useRef(trackVolume);
+  const trackPanRef = useRef(trackPan);
+  const bpmRef = useRef(bpm);
   const mutedTracksRef = useRef(mutedTracks);
   const soloTracksRef = useRef(soloTracks);
   const stepCountRef = useRef(stepCount);
@@ -444,6 +611,103 @@ export default function SequencerWorkstation() {
     }
   };
 
+  // ── Mixer: one channel strip (gain → pan → master) per track ──────────────
+  const ensureTrackChain = (trackId: string) => {
+    let chain = trackChainsRef.current[trackId];
+    if (!chain) {
+      if (!limiterRef.current) return null;
+      const gain = new Tone.Gain(volToGain(trackVolumeRef.current[trackId] ?? 100));
+      const pan = new Tone.Panner(panToPan(trackPanRef.current[trackId] ?? 0));
+      gain.connect(pan);
+      pan.connect(limiterRef.current);
+      chain = { gain, pan };
+      trackChainsRef.current[trackId] = chain;
+    }
+    return chain;
+  };
+
+  const disposeTrackSynth = (trackId: string) => {
+    const entry = trackSynthsRef.current[trackId];
+    if (entry) {
+      try { entry.inst.dispose(); } catch {}
+      delete trackSynthsRef.current[trackId];
+    }
+  };
+
+  const disposeTrackSampler = (trackId: string) => {
+    const sampler = trackSamplersRef.current[trackId];
+    if (sampler) {
+      try { sampler.dispose(); } catch {}
+      delete trackSamplersRef.current[trackId];
+      delete trackSamplerGmRef.current[trackId];
+    }
+  };
+
+  const disposeTrackSound = (trackId: string) => {
+    disposeTrackSynth(trackId);
+    disposeTrackSampler(trackId);
+  };
+
+  const disposeTrackChain = (trackId: string) => {
+    disposeTrackSound(trackId);
+    const chain = trackChainsRef.current[trackId];
+    if (chain) {
+      try { chain.gain.dispose(); } catch {}
+      try { chain.pan.dispose(); } catch {}
+      delete trackChainsRef.current[trackId];
+    }
+  };
+
+  const ensureTrackSynth = (track: TrackDef) => {
+    const existing = trackSynthsRef.current[track.id];
+    if (existing && existing.type === track.type) return existing.inst;
+    disposeTrackSynth(track.id);
+    const chain = ensureTrackChain(track.id);
+    if (!chain) return null;
+    const inst = createToneInstrument(track.type);
+    inst.connect(chain.gain);
+    trackSynthsRef.current[track.id] = { inst, type: track.type };
+    return inst;
+  };
+
+  const ensureTrackSamplerById = async (trackId: string, gmId: number) => {
+    if (trackSamplerGmRef.current[trackId] === gmId && trackSamplersRef.current[trackId]) {
+      return trackSamplersRef.current[trackId];
+    }
+    disposeTrackSampler(trackId);
+    const chain = ensureTrackChain(trackId);
+    const player = soundFontPlayerRef.current;
+    if (!chain || !player) return null;
+    const sampler = await player.createTrackSampler(gmId, chain.gain);
+    if (!sampler) return null;
+    // Track may have been removed or re-pointed while loading.
+    if (trackSamplerGmRef.current[trackId] !== undefined && trackSamplerGmRef.current[trackId] !== gmId) {
+      try { sampler.dispose(); } catch {}
+      return trackSamplersRef.current[trackId] ?? null;
+    }
+    trackSamplersRef.current[trackId] = sampler;
+    trackSamplerGmRef.current[trackId] = gmId;
+    return sampler;
+  };
+
+  const setTrackVolumeLive = (trackId: string, v: number) => {
+    const vol = Math.max(0, Math.min(100, Math.round(v)));
+    setTrackVolume(prev => ({ ...prev, [trackId]: vol }));
+    const chain = trackChainsRef.current[trackId];
+    if (chain) {
+      try { chain.gain.gain.rampTo(volToGain(vol), 0.05); } catch {}
+    }
+  };
+
+  const setTrackPanLive = (trackId: string, p: number) => {
+    const pan = Math.max(-50, Math.min(50, Math.round(p)));
+    setTrackPan(prev => ({ ...prev, [trackId]: pan }));
+    const chain = trackChainsRef.current[trackId];
+    if (chain) {
+      try { chain.pan.pan.rampTo(panToPan(pan), 0.05); } catch {}
+    }
+  };
+
   const refreshStepColCache = () => {
     const cache = Array.from({ length: stepCountRef.current }, () => ({ step: [] as HTMLElement[] }));
     document.querySelectorAll<HTMLElement>('[data-sequencer-step]').forEach(element => {
@@ -458,6 +722,36 @@ export default function SequencerWorkstation() {
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { trackEngineRef.current = trackEngine; }, [trackEngine]);
   useEffect(() => { trackVelocityRef.current = trackVelocity; }, [trackVelocity]);
+  useEffect(() => { trackVolumeRef.current = trackVolume; }, [trackVolume]);
+  useEffect(() => { trackPanRef.current = trackPan; }, [trackPan]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+
+  // Tap-anywhere autoplay: the first visitor gesture starts the showcase
+  // song (browsers only allow audio after user interaction).
+  useEffect(() => {
+    let done = false;
+    const autoStart = async (e: Event) => {
+      if (done) return;
+      const target = e.target as HTMLElement | null;
+      if (e.type === 'pointerdown' && target?.closest?.('.btn-playback')) return;
+      if (e.type === 'keydown' && document.activeElement instanceof HTMLButtonElement) return;
+      done = true;
+      setTapHint(false);
+      try {
+        if (isPlayingRef.current) return;
+        await Tone.start();
+        if (!isPlayingRef.current) await togglePlayback();
+      } catch {}
+    };
+    window.addEventListener('pointerdown', autoStart);
+    window.addEventListener('keydown', autoStart);
+    return () => {
+      window.removeEventListener('pointerdown', autoStart);
+      window.removeEventListener('keydown', autoStart);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => { mutedTracksRef.current = mutedTracks; }, [mutedTracks]);
   useEffect(() => { soloTracksRef.current = soloTracks; }, [soloTracks]);
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
@@ -497,165 +791,33 @@ export default function SequencerWorkstation() {
       setSfStatus(prev => ({ ...prev, [instrumentId]: state }));
     };
 
-    // Preset showcase song instruments first so every track sounds on first play,
-    // then the generic defaults.
+    // Warm the GM sample maps, then build one mixer strip + sound per track
+    // so volume/pan apply per track from the very first note.
     const showcaseGm = SHOWCASE_SONG.tracks.map(t => t.defaultGmId ?? 0);
     [...new Set([0, 24, 33, 48, 61, 81, 116, ...showcaseGm])].forEach(id => {
       sfPlayer.loadInstrument(id).catch(() => {});
     });
-
-    const kick = new Tone.MembraneSynth({
-      pitchDecay: 0.05,
-      octaves: 6,
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.001, decay: 0.35, sustain: 0.01, release: 0.35 }
-    }).connect(masterLimiter);
-
-    const sub808 = new Tone.MembraneSynth({
-      pitchDecay: 0.08,
-      octaves: 3,
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.02, decay: 0.5, sustain: 0.2, release: 0.5 }
-    }).connect(masterLimiter);
-    sub808.volume.value = -1;
-
-    const snare = new Tone.NoiseSynth({
-      noise: { type: 'white' },
-      envelope: { attack: 0.001, decay: 0.18, sustain: 0 }
-    }).connect(masterLimiter);
-
-    const clap = new Tone.Synth({
-      oscillator: { type: 'triangle' },
-      envelope: { attack: 0.01, decay: 0.12, sustain: 0, release: 0.08 }
-    }).connect(masterLimiter);
-
-    const hihat = new Tone.MetalSynth({
-      envelope: { attack: 0.001, decay: 0.04, release: 0.04 },
-      harmonicity: 5.1,
-      modulationIndex: 32,
-      resonance: 4000,
-      octaves: 1.5
-    }).connect(masterLimiter);
-    hihat.frequency.value = 250;
-    hihat.volume.value = -8;
-
-    const openhat = new Tone.MetalSynth({
-      envelope: { attack: 0.005, decay: 0.25, release: 0.2 },
-      harmonicity: 4.8,
-      modulationIndex: 28,
-      resonance: 3500,
-      octaves: 1.2
-    }).connect(masterLimiter);
-    openhat.frequency.value = 220;
-    openhat.volume.value = -8;
-
-    const tom = new Tone.MembraneSynth({
-      pitchDecay: 0.06,
-      octaves: 4,
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.002, decay: 0.25, sustain: 0.01, release: 0.2 }
-    }).connect(masterLimiter);
-
-    const rimshot = new Tone.Synth({
-      oscillator: { type: 'square' },
-      envelope: { attack: 0.001, decay: 0.03, sustain: 0, release: 0.03 }
-    }).connect(masterLimiter);
-    rimshot.volume.value = -4;
-
-    const cowbell = new Tone.MetalSynth({
-      envelope: { attack: 0.001, decay: 0.1, release: 0.08 },
-      harmonicity: 1.4,
-      modulationIndex: 12,
-      resonance: 2500,
-      octaves: 0.5
-    }).connect(masterLimiter);
-    cowbell.frequency.value = 540;
-    cowbell.volume.value = -6;
-
-    const bass = new Tone.FMSynth({
-      harmonicity: 1,
-      modulationIndex: 2,
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.01, decay: 0.25, sustain: 0.3, release: 0.3 }
-    }).connect(masterLimiter);
-    bass.volume.value = -3;
-
-    const acidBass = new Tone.PolySynth(Tone.MonoSynth, {
-      oscillator: { type: 'sawtooth' },
-      filter: { Q: 6, type: 'lowpass' },
-      envelope: { attack: 0.01, decay: 0.18, sustain: 0.2, release: 0.2 },
-      filterEnvelope: { attack: 0.02, decay: 0.12, sustain: 0.1, release: 0.15, baseFrequency: 80, octaves: 4 }
-    }).connect(masterLimiter);
-    acidBass.maxPolyphony = 8;
-    acidBass.volume.value = -3;
-
-    const synthLead = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sawtooth' },
-      envelope: { attack: 0.02, decay: 0.15, sustain: 0.2, release: 0.3 }
-    }).connect(masterLimiter);
-    synthLead.maxPolyphony = 8;
-    synthLead.volume.value = -6;
-
-    const pluck = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'triangle' },
-      envelope: { attack: 0.005, decay: 0.12, sustain: 0, release: 0.1 }
-    }).connect(masterLimiter);
-    pluck.maxPolyphony = 8;
-    pluck.volume.value = -3;
-
-    const chordPad = new Tone.PolySynth(Tone.AMSynth, {
-      harmonicity: 2,
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 0.4 }
-    }).connect(masterLimiter);
-    chordPad.maxPolyphony = 8;
-    chordPad.volume.value = -6;
-
-    const spacePad = new Tone.PolySynth(Tone.FMSynth, {
-      harmonicity: 3,
-      modulationIndex: 10,
-      oscillator: { type: 'triangle' },
-      envelope: { attack: 0.1, decay: 0.35, sustain: 0.5, release: 0.5 }
-    }).connect(masterLimiter);
-    spacePad.maxPolyphony = 8;
-    spacePad.volume.value = -8;
-
-    const wobble = new Tone.PolySynth(Tone.MonoSynth, {
-      oscillator: { type: 'square' },
-      filter: { Q: 4, type: 'lowpass' },
-      envelope: { attack: 0.03, decay: 0.18, sustain: 0.4, release: 0.25 },
-      filterEnvelope: { attack: 0.08, decay: 0.15, sustain: 0.2, release: 0.2, baseFrequency: 120, octaves: 3 }
-    }).connect(masterLimiter);
-    wobble.maxPolyphony = 8;
-    wobble.volume.value = -4;
-
-    instrumentsRef.current = {
-      membrane: kick,
-      sub808: sub808,
-      noise: snare,
-      synth: clap,
-      metal: hihat,
-      metal_open: openhat,
-      tom,
-      rim: rimshot,
-      cowbell,
-      fm: bass,
-      acid: acidBass,
-      poly: synthLead,
-      pluck,
-      am: chordPad,
-      space: spacePad,
-      wobble
-    };
+    tracks.forEach(track => {
+      ensureTrackChain(track.id);
+      const engine = trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth');
+      if (engine === 'soundfont') {
+        const gmId = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
+        ensureTrackSamplerById(track.id, gmId).catch(() => {});
+      } else {
+        ensureTrackSynth(track);
+      }
+    });
 
     return () => {
       try {
         Tone.Transport.stop();
         Tone.Transport.cancel();
       } catch {}
-      Object.values(instrumentsRef.current).forEach(inst => {
-        try { inst.dispose(); } catch {}
-      });
+      Object.keys(trackChainsRef.current).forEach(id => disposeTrackChain(id));
+      trackChainsRef.current = {};
+      trackSynthsRef.current = {};
+      trackSamplersRef.current = {};
+      trackSamplerGmRef.current = {};
       try { limiterRef.current?.dispose(); } catch {}
       limiterRef.current = null;
       try { soundFontPlayerRef.current?.dispose(); } catch {}
@@ -678,23 +840,36 @@ export default function SequencerWorkstation() {
     return trackDef.type === 'soundfont';
   };
 
-  const fireSynth = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number) => {
-    const inst = instrumentsRef.current[trackDef.type];
-    if (!inst) return;
-    if (trackDef.type === 'membrane' || trackDef.type === 'sub808' || trackDef.type === 'tom') {
-      inst.triggerAttackRelease(currentNote || 'C1', '8n', triggerTime, velocity);
-    } else if (trackDef.type === 'noise') {
-      inst.triggerAttackRelease(currentNote || '16n', triggerTime, velocity);
-    } else if (trackDef.type === 'metal' || trackDef.type === 'metal_open' || trackDef.type === 'cowbell') {
-      inst.triggerAttackRelease(currentNote || '32n', triggerTime, velocity);
-    } else if (trackDef.type === 'fm' || trackDef.type === 'synth' || trackDef.type === 'rim') {
-      inst.triggerAttackRelease(currentNote || 'C3', '8n', triggerTime, velocity);
-    } else if (trackDef.type === 'acid' || trackDef.type === 'wobble') {
-      inst.triggerAttackRelease(currentNote || 'C2', '8n', triggerTime, velocity);
-    } else if (trackDef.type === 'pluck') {
-      inst.triggerAttackRelease(currentNote || 'C4', '16n', triggerTime, velocity);
-    } else if (trackDef.type === 'poly' || trackDef.type === 'am' || trackDef.type === 'space') {
-      inst.triggerAttackRelease(currentNote || 'C4', '8n', triggerTime, velocity);
+  // Single trigger path for every track: per-track Tone synth or per-track
+  // SoundFont sampler, both routed through the track's mixer strip.
+  const fireTrackSound = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number, duration: string | number = '8n') => {
+    try {
+      if (usesSoundFont(trackDef)) {
+        if (trackSamplerGmRef.current[trackDef.id] === undefined) return;
+        const sampler = trackSamplersRef.current[trackDef.id];
+        if (!sampler) return;
+        sampler.triggerAttackRelease(currentNote || 'C4', duration, triggerTime, velocity);
+        return;
+      }
+      const inst = ensureTrackSynth(trackDef);
+      if (!inst) return;
+      if (trackDef.type === 'membrane' || trackDef.type === 'sub808' || trackDef.type === 'tom') {
+        inst.triggerAttackRelease(currentNote || 'C1', '8n', triggerTime, velocity);
+      } else if (trackDef.type === 'noise') {
+        inst.triggerAttackRelease(currentNote || '16n', triggerTime, velocity);
+      } else if (trackDef.type === 'metal' || trackDef.type === 'metal_open' || trackDef.type === 'cowbell') {
+        inst.triggerAttackRelease(currentNote || '32n', triggerTime, velocity);
+      } else if (trackDef.type === 'fm' || trackDef.type === 'synth' || trackDef.type === 'rim') {
+        inst.triggerAttackRelease(currentNote || 'C3', '8n', triggerTime, velocity);
+      } else if (trackDef.type === 'acid' || trackDef.type === 'wobble') {
+        inst.triggerAttackRelease(currentNote || 'C2', '8n', triggerTime, velocity);
+      } else if (trackDef.type === 'pluck') {
+        inst.triggerAttackRelease(currentNote || 'C4', '16n', triggerTime, velocity);
+      } else {
+        inst.triggerAttackRelease(currentNote || 'C4', '8n', triggerTime, velocity);
+      }
+    } catch {
+      // timing collision
     }
   };
 
@@ -709,19 +884,14 @@ export default function SequencerWorkstation() {
 
       if (usesSoundFont(trackDef)) {
         const gmId = trackGmInstrumentsRef.current[trackDef.id] ?? defaultGmForTrack(trackDef);
-        const player = soundFontPlayerRef.current;
-        if (!player) return;
-        if (!player.isLoaded(gmId)) {
-          loadSoundFontInstrument(gmId).then(() => {
-            player.triggerNote(gmId, currentNote || 'C4', '8n', undefined, velocity);
-          });
-        } else {
-          player.triggerNote(gmId, currentNote || 'C4', '8n', triggerTime, velocity);
-        }
+        await loadSoundFontInstrument(gmId);
+        const sampler = await ensureTrackSamplerById(trackDef.id, gmId);
+        if (!sampler) return;
+        sampler.triggerAttackRelease(currentNote || 'C4', '8n', triggerTime, velocity);
         return;
       }
 
-      fireSynth(trackDef, currentNote, triggerTime, velocity);
+      fireTrackSound(trackDef, currentNote, triggerTime, velocity);
     } catch {
       // overlapping audio thread collision
     }
@@ -765,7 +935,7 @@ export default function SequencerWorkstation() {
       }
 
       await Tone.start();
-      Tone.Transport.bpm.value = bpm;
+      Tone.Transport.bpm.value = bpmRef.current;
       stepRef.current = 0;
       refreshStepColCache();
 
@@ -784,19 +954,7 @@ export default function SequencerWorkstation() {
           const currentNote = getTrackActiveNote(track);
           const velocity = (trackVelocityRef.current[track.id] ?? 100) / 127;
 
-          try {
-            if (usesSoundFont(track)) {
-              const gmId = trackGmInstrumentsRef.current[track.id] ?? defaultGmForTrack(track);
-              const player = soundFontPlayerRef.current;
-              if (player && player.isLoaded(gmId)) {
-                player.triggerNote(gmId, currentNote || 'C4', '8n', time, velocity);
-              }
-            } else {
-              fireSynth(track, currentNote, time, velocity);
-            }
-          } catch {
-            // timing collision
-          }
+          fireTrackSound(track, currentNote, time, velocity);
         }
 
         if (activeViewRef.current === 'arrangement') {
@@ -809,15 +967,7 @@ export default function SequencerWorkstation() {
               const noteName = midiNoteName(note.pitch);
               const velocity = note.velocity / 127;
               const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
-              try {
-                if (usesSoundFont(track)) {
-                  const gmId = trackGmInstrumentsRef.current[track.id] ?? defaultGmForTrack(track);
-                  const player = soundFontPlayerRef.current;
-                  if (player?.isLoaded(gmId)) player.triggerNote(gmId, noteName, duration, time, velocity);
-                } else {
-                  fireSynth(track, noteName, time, velocity);
-                }
-              } catch {}
+              fireTrackSound(track, noteName, time, velocity, duration);
             });
           });
         }
@@ -971,7 +1121,11 @@ export default function SequencerWorkstation() {
     setTrackEngine(prev => ({ ...prev, [id]: 'soundfont' }));
     setTrackGmInstruments(prev => ({ ...prev, [id]: gmId }));
     setTrackVelocity(prev => ({ ...prev, [id]: 100 }));
+    setTrackVolume(prev => ({ ...prev, [id]: 100 }));
+    setTrackPan(prev => ({ ...prev, [id]: 0 }));
     loadSoundFontInstrument(gmId);
+    ensureTrackChain(id);
+    ensureTrackSamplerById(id, gmId).catch(() => {});
   };
 
   const removeChannel = (trackId: string) => {
@@ -999,17 +1153,33 @@ export default function SequencerWorkstation() {
       delete next[trackId];
       return next;
     });
+    setTrackVolume(prev => {
+      const next = { ...prev };
+      delete next[trackId];
+      return next;
+    });
+    setTrackPan(prev => {
+      const next = { ...prev };
+      delete next[trackId];
+      return next;
+    });
+    disposeTrackChain(trackId);
   };
 
   const setChannelEngine = (track: TrackDef, engine: TrackEngine) => {
     setTrackEngine(prev => ({ ...prev, [track.id]: engine }));
     if (engine === 'soundfont') {
+      disposeTrackSynth(track.id);
       const gmId = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
       setTrackGmInstruments(prev => ({ ...prev, [track.id]: gmId }));
       const note = getTrackActiveNote(track);
       const safeNote = note.endsWith('n') ? (track.note && !track.note.endsWith('n') ? track.note : 'C4') : note;
       setTrackPresets(prev => ({ ...prev, [track.id]: safeNote }));
       loadSoundFontInstrument(gmId);
+      ensureTrackSamplerById(track.id, gmId).catch(() => {});
+    } else {
+      disposeTrackSampler(track.id);
+      ensureTrackSynth(track);
     }
   };
 
@@ -1026,7 +1196,8 @@ export default function SequencerWorkstation() {
       : currentNote;
     setTrackPresets(prev => ({ ...prev, [track.id]: note }));
     await loadSoundFontInstrument(gmId);
-    soundFontPlayerRef.current?.triggerNote(gmId, note, '8n');
+    const sampler = await ensureTrackSamplerById(track.id, gmId);
+    sampler?.triggerAttackRelease(note, '8n', Tone.now(), (trackVelocityRef.current[track.id] ?? 100) / 127);
   };
 
   const applyInstrumentToAll = async (gmId: number) => {
@@ -1042,6 +1213,10 @@ export default function SequencerWorkstation() {
       return next;
     });
     await loadSoundFontInstrument(gmId);
+    tracks.forEach(t => {
+      disposeTrackSynth(t.id);
+      ensureTrackSamplerById(t.id, gmId).catch(() => {});
+    });
     // Keep channel names; only the GM program changes.
   };
 
@@ -1090,7 +1265,7 @@ export default function SequencerWorkstation() {
         if (sf) midiTrack.instrument.number = gmId;
 
         const midiPitch = getMidiPitchForTrack(track);
-        const vel = (trackVelocity[track.id] ?? 100) / 127;
+        const vel = ((trackVelocity[track.id] ?? 100) / 127) * ((trackVolume[track.id] ?? 100) / 100);
 
         for (let s = 0; s < stepCount; s++) {
           if (trackNotes?.[s] || isHeld) {
@@ -1114,12 +1289,13 @@ export default function SequencerWorkstation() {
           midiTrack.name = `${track.name} — ${clip.name}`;
           midiTrack.channel = Math.min(15, clipIndex);
           midiTrack.instrument.number = gmId;
+          const mix = (trackVolume[track.id] ?? 100) / 100;
           clip.notes.forEach(note => {
             midiTrack.addNote({
               midi: note.pitch,
               ticks: (clip.start + note.start) * ticksPer16th,
               durationTicks: Math.max(1, note.duration * ticksPer16th),
-              velocity: note.velocity / 127
+              velocity: (note.velocity / 127) * mix
             });
             notesAdded++;
           });
@@ -1164,6 +1340,8 @@ export default function SequencerWorkstation() {
         trackGmInstruments,
         trackEngine,
         trackVelocity,
+        trackVolume,
+        trackPan,
         selectedTracks,
         holdTones,
         mutedTracks,
@@ -1211,6 +1389,20 @@ export default function SequencerWorkstation() {
     if (data.trackGmInstruments) setTrackGmInstruments(data.trackGmInstruments);
     if (data.trackEngine) setTrackEngine(data.trackEngine);
     if (data.trackVelocity) setTrackVelocity(data.trackVelocity);
+    if (data.trackVolume) {
+      setTrackVolume(data.trackVolume);
+      Object.entries(data.trackVolume as Record<string, number>).forEach(([id, v]) => {
+        const chain = trackChainsRef.current[id];
+        if (chain) { try { chain.gain.gain.rampTo(volToGain(v), 0.05); } catch {} }
+      });
+    }
+    if (data.trackPan) {
+      setTrackPan(data.trackPan);
+      Object.entries(data.trackPan as Record<string, number>).forEach(([id, p]) => {
+        const chain = trackChainsRef.current[id];
+        if (chain) { try { chain.pan.pan.rampTo(panToPan(p), 0.05); } catch {} }
+      });
+    }
     if (data.selectedTracks) setSelectedTracks(data.selectedTracks);
     if (data.holdTones) setHoldTones(data.holdTones);
     if (data.mutedTracks) setMutedTracks(data.mutedTracks);
@@ -1223,6 +1415,23 @@ export default function SequencerWorkstation() {
     }
     const programs = new Set<number>(Object.values((data.trackGmInstruments || {}) as Record<string, number>));
     programs.forEach(program => loadSoundFontInstrument(program));
+    if (Array.isArray(data.tracks)) {
+      const freshIds = new Set((data.tracks as TrackDef[]).map(t => t.id));
+      Object.keys(trackChainsRef.current).forEach(id => {
+        if (!freshIds.has(id)) disposeTrackChain(id);
+      });
+      (data.tracks as TrackDef[]).forEach(t => {
+        ensureTrackChain(t.id);
+        const eng = (data.trackEngine as Record<string, TrackEngine> | undefined)?.[t.id]
+          ?? (t.type === 'soundfont' ? 'soundfont' : 'synth');
+        if (eng === 'soundfont') {
+          const g = (data.trackGmInstruments as Record<string, number> | undefined)?.[t.id] ?? defaultGmForTrack(t);
+          ensureTrackSamplerById(t.id, g).catch(() => {});
+        } else {
+          ensureTrackSynth(t);
+        }
+      });
+    }
     showToast(label);
   };
 
@@ -1353,11 +1562,30 @@ export default function SequencerWorkstation() {
     setTrackEngine(nextEngine);
     setTrackPresets(nextPresets);
     setTrackVelocity(nextVel);
+    setTrackVolume(prev => {
+      const next = { ...prev };
+      nextSelected.forEach(id => { if (next[id] === undefined) next[id] = 100; });
+      return next;
+    });
+    setTrackPan(prev => {
+      const next = { ...prev };
+      nextSelected.forEach(id => { if (next[id] === undefined) next[id] = 0; });
+      return next;
+    });
     setSelectedTracks(nextSelected);
     setHoldTones({});
     setMutedTracks({});
     setSoloTracks({});
     programsToLoad.forEach(program => loadSoundFontInstrument(program));
+    // Rebuild mixer strips for the fresh track list; drop orphaned ones.
+    const freshIds = new Set(nextSelected);
+    Object.keys(trackChainsRef.current).forEach(id => {
+      if (!freshIds.has(id)) disposeTrackChain(id);
+    });
+    nextTracks.forEach(t => {
+      ensureTrackChain(t.id);
+      ensureTrackSamplerById(t.id, nextGm[t.id]).catch(() => {});
+    });
 
     const totalBars = Math.ceil(importedStepCount / STEPS_PER_BAR);
     showToast(importWasTruncated
@@ -1819,6 +2047,23 @@ export default function SequencerWorkstation() {
                         </span>
                       )}
                     </div>
+
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} title="Mixer: volume and stereo pan">
+                      <span style={{ fontSize: 8, fontWeight: 800, color: '#78909c', flexShrink: 0 }}>VOL</span>
+                      <input
+                        type="range" min={0} max={100} value={trackVolume[track.id] ?? 100}
+                        onChange={e => setTrackVolumeLive(track.id, Number(e.target.value))}
+                        style={{ width: 56, accentColor: track.color, cursor: 'pointer' }}
+                        title={`Volume ${(trackVolume[track.id] ?? 100)}%`}
+                      />
+                      <span style={{ fontSize: 8, fontWeight: 800, color: '#78909c', flexShrink: 0 }}>PAN</span>
+                      <input
+                        type="range" min={-50} max={50} value={trackPan[track.id] ?? 0}
+                        onChange={e => setTrackPanLive(track.id, Number(e.target.value))}
+                        style={{ width: 56, accentColor: '#00e5ff', cursor: 'pointer' }}
+                        title={`Pan ${(trackPan[track.id] ?? 0) > 0 ? `R${trackPan[track.id]}` : (trackPan[track.id] ?? 0) < 0 ? `L${Math.abs(trackPan[track.id] ?? 0)}` : 'center'}`}
+                      />
+                    </div>
                   </div>
 
                   <button
@@ -1982,6 +2227,29 @@ export default function SequencerWorkstation() {
           </div>
         </div>
       </div>
+
+      {tapHint && !isPlaying && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 32,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 9998,
+            pointerEvents: 'none',
+            background: '#00e676',
+            color: '#000',
+            fontWeight: 800,
+            fontSize: 13,
+            padding: '10px 22px',
+            borderRadius: 999,
+            boxShadow: '0 0 24px #00e67688',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          Tap anywhere to play
+        </div>
+      )}
     </div>
   );
 }
