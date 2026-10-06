@@ -40,7 +40,7 @@ const stepCount = Math.max(16, Math.min(MAX_STEPS, Math.ceil(Math.min(rawSteps, 
 let bpm = 120;
 if (midi.header.tempos?.length) {
   const b = Math.round(midi.header.tempos[0].bpm);
-  if (b >= 60 && b <= 180) bpm = b;
+  if (b >= 40 && b <= 300) bpm = b;
 }
 
 const tracks = [];

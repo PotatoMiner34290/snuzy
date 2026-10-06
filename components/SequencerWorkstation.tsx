@@ -11,6 +11,7 @@ import {
 import ArrangementView, { type InstrumentClip } from './ArrangementView';
 import ContextMenu, { type CtxItem } from './ContextMenu';
 import TourGuide, { type TourStep } from './TourGuide';
+import SecretPiano from './SecretPiano';
 import { SHOWCASE_SONG } from './ShowcaseSong';
 
 const SHOWCASE_TRACKS = SHOWCASE_SONG.tracks as unknown as TrackDef[];
@@ -595,6 +596,7 @@ export default function SequencerWorkstation() {
   const [tapHint, setTapHint] = useState<boolean>(true);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null } | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
+  const [secretPiano, setSecretPiano] = useState<boolean>(false);
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -624,6 +626,26 @@ export default function SequencerWorkstation() {
   // overrides get their own ready-to-play sampler on the track's strip.
   const trackSamplersRef = useRef<Record<string, Tone.Sampler>>({});
   const samplerKey = (trackId: string, gmId: number) => `${trackId}:${gmId}`;
+  // Voice limiter: samplers (unlike synths) spawn unbounded voices, so at
+  // extreme tempos dense passages would pile up hundreds of concurrent
+  // voices and take down the audio thread. Past the cap we shed new notes
+  // (old ones keep ringing) instead of crashing.
+  const MAX_SAMPLER_VOICES = 28;
+  const samplerVoicesRef = useRef<Map<Tone.Sampler, number>>(new Map());
+
+  const samplerHasRoom = (sampler: Tone.Sampler, duration: string | number): boolean => {
+    const active = samplerVoicesRef.current.get(sampler) ?? 0;
+    if (active >= MAX_SAMPLER_VOICES) return false;
+    samplerVoicesRef.current.set(sampler, active + 1);
+    let holdMs = 400;
+    try {
+      holdMs = Math.max(80, Math.min(2500, Tone.Time(duration).toSeconds() * 1000 + 150));
+    } catch {}
+    window.setTimeout(() => {
+      samplerVoicesRef.current.set(sampler, Math.max(0, (samplerVoicesRef.current.get(sampler) ?? 1) - 1));
+    }, holdMs);
+    return true;
+  };
   const isPlayingRef = useRef<boolean>(false);
   const repeatIdRef = useRef<number | null>(null);
   const stepRef = useRef<number>(0);
@@ -931,7 +953,7 @@ export default function SequencerWorkstation() {
       if (usesSoundFont(trackDef)) {
         const gmId = gmOverride ?? trackGmInstrumentsRef.current[trackDef.id] ?? defaultGmForTrack(trackDef);
         const sampler = trackSamplersRef.current[samplerKey(trackDef.id, gmId)];
-        if (!sampler) return;
+        if (!sampler || !samplerHasRoom(sampler, duration)) return;
         sampler.triggerAttackRelease(currentNote || 'C4', duration, triggerTime, velocity);
         return;
       }
@@ -970,7 +992,7 @@ export default function SequencerWorkstation() {
         const gmId = trackGmInstrumentsRef.current[trackDef.id] ?? defaultGmForTrack(trackDef);
         await loadSoundFontInstrument(gmId);
         const sampler = await ensureTrackSamplerById(trackDef.id, gmId);
-        if (!sampler) return;
+        if (!sampler || !samplerHasRoom(sampler, '8n')) return;
         sampler.triggerAttackRelease(currentNote || 'C4', '8n', triggerTime, velocity);
         return;
       }
@@ -1012,8 +1034,18 @@ export default function SequencerWorkstation() {
     }
     if (reset) {
       const playhead = document.querySelector<HTMLElement>('[data-arrangement-playhead]');
-      if (playhead) playhead.style.left = '180px';
-      gridScrollRef.current?.scrollTo({ left: 0 });
+      if (playhead) {
+        // Snap back instantly — the glide transition must not animate rewind.
+        try {
+          playhead.style.transition = 'none';
+          playhead.style.left = '180px';
+          void playhead.offsetWidth;
+          playhead.style.transition = '';
+        } catch {
+          playhead.style.left = '180px';
+        }
+      }
+      gridScrollRef.current?.scrollTo({ left: 0, behavior: 'auto' });
     }
   };
 
@@ -1041,7 +1073,7 @@ export default function SequencerWorkstation() {
     if (scroller && target) {
       const scrollerRect = scroller.getBoundingClientRect();
       const cellRect = target.getBoundingClientRect();
-      scroller.scrollTo({ left: Math.max(0, scroller.scrollLeft + cellRect.left - scrollerRect.left - scroller.clientWidth / 2) });
+      scroller.scrollTo({ left: Math.max(0, scroller.scrollLeft + cellRect.left - scrollerRect.left - scroller.clientWidth / 2), behavior: 'auto' });
     }
   };
 
@@ -1107,7 +1139,23 @@ export default function SequencerWorkstation() {
           const playhead = document.querySelector<HTMLElement>('[data-arrangement-playhead]');
           const canvas = playhead?.parentElement;
           if (playhead && canvas) {
-            playhead.style.left = `${180 + (step / steps) * (canvas.clientWidth - 180)}px`;
+            // Glide (one step duration) instead of jumping each tick.
+            try {
+              playhead.style.transition = `left ${(60 / bpmRef.current / 4).toFixed(3)}s linear`;
+              playhead.style.left = `${180 + (step / steps) * (canvas.clientWidth - 180)}px`;
+            } catch {
+              playhead.style.left = `${180 + (step / steps) * (canvas.clientWidth - 180)}px`;
+            }
+            // Keep the playhead in view with a smooth cruise — retargeting a
+            // smooth scroll every tick glides instead of jumping.
+            const laneScroller = playhead.closest('.arrangement-scroll') as HTMLElement | null;
+            if (laneScroller) {
+              const pr = playhead.getBoundingClientRect();
+              const sr = laneScroller.getBoundingClientRect();
+              if (pr.left < sr.left + 200 || pr.right > sr.right - 80) {
+                laneScroller.scrollTo({ left: Math.max(0, laneScroller.scrollLeft + pr.left - sr.left - laneScroller.clientWidth * 0.35) });
+              }
+            }
           }
           let cache = stepColCacheRef.current;
           if (cache.length === 0) {
@@ -1122,13 +1170,15 @@ export default function SequencerWorkstation() {
           cache[step]?.step.forEach(el => el.classList.add('step-current'));
 
           const scroller = gridScrollRef.current;
-          const activeCells = cache[step]?.step.filter(element => {
+          // Highlight sounding pads. Vertical position is NEVER touched here —
+          // the user owns up/down scrolling; follow only cruises sideways.
+          cache[step]?.step.forEach(element => {
             const trackId = element.dataset.trackId;
-            const active = element.classList.contains('pad-cell') && !!trackId
+            if (element.classList.contains('pad-cell') && !!trackId
               && channelAudible(trackId)
-              && !!(currentGrid[trackId]?.[step] || currentHolds[trackId]);
-            if (active) element.classList.add('note-playing');
-            return active;
+              && !!(currentGrid[trackId]?.[step] || currentHolds[trackId])) {
+              element.classList.add('note-playing');
+            }
           });
           const horizontalTarget = cache[step]?.step.find(el => el.classList.contains('pad-cell'));
           // Don't yank the grid while a dropdown menu has focus: browsers
@@ -1141,25 +1191,12 @@ export default function SequencerWorkstation() {
             const stickyControlsWidth = 340;
             const safeLeft = scrollerRect.left + stickyControlsWidth;
             const safeRight = scrollerRect.right - 72;
-            let nextLeft = scroller.scrollLeft;
-            let nextTop = scroller.scrollTop;
-            if (cellRect.left < safeLeft || cellRect.right > safeRight) {
-              nextLeft = Math.max(0, scroller.scrollLeft + cellRect.left - safeLeft);
-            }
-
-            if (activeCells.length > 0) {
-              const sortedCells = [...activeCells].sort((a, b) => a.offsetTop - b.offsetTop);
-              const focusCell = sortedCells[Math.floor(sortedCells.length / 2)];
-              const focusRect = focusCell.getBoundingClientRect();
-              const safeTop = scrollerRect.top + 72;
-              const safeBottom = scrollerRect.bottom - 72;
-              if (focusRect.top < safeTop || focusRect.bottom > safeBottom) {
-                nextTop = Math.max(0, scroller.scrollTop + focusRect.top - scrollerRect.top - scroller.clientHeight / 2);
-              }
-            }
-
-            if (nextLeft !== scroller.scrollLeft || nextTop !== scroller.scrollTop) {
-              scroller.scrollTo({ left: nextLeft, top: nextTop, behavior: 'auto' });
+            const nextLeft = (cellRect.left < safeLeft || cellRect.right > safeRight)
+              ? Math.max(0, scroller.scrollLeft + cellRect.left - safeLeft)
+              : scroller.scrollLeft;
+            if (nextLeft !== scroller.scrollLeft) {
+              // No behavior flag: the container's smooth scroll-behavior glides.
+              scroller.scrollTo({ left: nextLeft, top: scroller.scrollTop });
             }
           }
         }, time);
@@ -1834,7 +1871,7 @@ export default function SequencerWorkstation() {
 
     if (imported.header.tempos && imported.header.tempos.length > 0) {
       const fileBpm = Math.round(imported.header.tempos[0].bpm);
-      if (fileBpm >= 60 && fileBpm <= 180) setBpm(fileBpm);
+      if (fileBpm >= 40 && fileBpm <= 300) setBpm(fileBpm);
     }
 
     const instrumentTracks = imported.tracks.filter(t => t.notes.length > 0);
@@ -2228,8 +2265,8 @@ export default function SequencerWorkstation() {
             BPM: <strong style={{ color: '#00e5ff' }}>{bpm}</strong>
             <input
               type="range"
-              min="60"
-              max="180"
+              min="40"
+              max="300"
               value={bpm}
               onChange={e => setBpm(Number(e.target.value))}
               style={{ display: 'block', width: 110, accentColor: '#00e5ff', cursor: 'pointer' }}
@@ -2856,6 +2893,34 @@ export default function SequencerWorkstation() {
           onNext={() => setTourStep(s => (s === null || s + 1 >= TOUR_STEPS.length ? null : s + 1))}
           onBack={() => setTourStep(s => (s === null || s === 0 ? s : s - 1))}
           onClose={() => setTourStep(null)}
+        />
+      )}
+
+      {!secretPiano && (
+        <button
+          onClick={() => setSecretPiano(true)}
+          title="Shh… secret piano"
+          style={{
+            position: 'fixed', left: 12, bottom: 12, zIndex: 9997,
+            width: 34, height: 34, borderRadius: '50%',
+            border: '1px solid #3b475d', background: '#171c29', color: '#607d8b',
+            cursor: 'pointer', fontSize: 16, fontWeight: 800, lineHeight: 1,
+          }}
+        >
+          ?
+        </button>
+      )}
+
+      {secretPiano && (
+        <SecretPiano
+          tracks={tracks}
+          clips={arrangementClips}
+          stepCount={stepCount}
+          bpm={bpm}
+          isPlaying={isPlaying}
+          stepRef={stepRef}
+          onTogglePlay={() => togglePlayback()}
+          onExit={() => setSecretPiano(false)}
         />
       )}
     </div>
