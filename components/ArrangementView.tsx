@@ -2,6 +2,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Copy, Plus, Trash2 } from 'lucide-react';
+import { GM_INSTRUMENTS, getInstrumentsByCategory } from './SoundFontEngine';
 import type { TrackDef } from './SequencerWorkstation';
 
 export interface ClipNote {
@@ -19,6 +20,9 @@ export interface InstrumentClip {
   start: number;
   length: number;
   notes: ClipNote[];
+  // Per-block instrument override. When set, this block plays (and exports)
+  // with this GM program instead of its track's instrument.
+  gmId?: number;
 }
 
 interface Props {
@@ -27,6 +31,8 @@ interface Props {
   clips: InstrumentClip[];
   setClips: React.Dispatch<React.SetStateAction<InstrumentClip[]>>;
   onExtend?: (extraSteps: number) => void;
+  trackGmInstruments: Record<string, number>;
+  onSetClipInstrument: (clipId: string, gmId: number | null) => void;
 }
 
 const PITCH_LOW = 21;
@@ -37,7 +43,8 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 const pitchName = (pitch: number) => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
 const uid = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-export default function ArrangementView({ tracks, stepCount, clips, setClips, onExtend }: Props) {
+export default function ArrangementView({ tracks, stepCount, clips, setClips, onExtend, trackGmInstruments, onSetClipInstrument }: Props) {
+  const groupedGm = useMemo(() => getInstrumentsByCategory(), []);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(clips[0]?.id ?? null);
   const [noteLength, setNoteLength] = useState(1);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -158,7 +165,7 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
           </div>
           <div className="arrangement-playhead" data-arrangement-playhead />
           {tracks.map(track => (
-            <div className="arrangement-lane" key={track.id}>
+            <div className="arrangement-lane" key={track.id} data-ctx-track={track.id}>
               <div className="lane-label" style={{ borderLeftColor: track.color }}>
                 <span>{track.name}</span>
                 <button onClick={() => addClip(track.id)} title={`Add ${track.name} clip`}><Plus size={14} /></button>
@@ -167,12 +174,14 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
                 {(clipsByTrack[track.id] || []).map(clip => (
                   <button
                     key={clip.id}
+                    data-ctx-track={track.id}
+                    data-ctx-clip={clip.id}
                     className={`instrument-clip ${selectedClipId === clip.id ? 'selected' : ''}`}
                     style={{ left: `${clip.start / stepCount * 100}%`, width: `${clip.length / stepCount * 100}%`, background: track.color }}
                     onClick={() => setSelectedClipId(clip.id)}
-                    title={`${clip.name}: ${clip.notes.length} notes`}
+                    title={`${clip.name}: ${clip.notes.length} notes${clip.gmId !== undefined ? ` · ${GM_INSTRUMENTS[clip.gmId]?.name ?? ''}` : ''}`}
                   >
-                    <strong>{clip.name}</strong><small>{clip.notes.length} notes</small>
+                    <strong>{clip.name}</strong><small>{clip.notes.length} notes{clip.gmId !== undefined ? ' · ✦' : ''}</small>
                   </button>
                 ))}
                 <button className="lane-add" onClick={() => addClip(track.id)}><Plus size={14} /> Add block</button>
@@ -183,7 +192,7 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
       </div>
 
       {selectedClip && (
-        <div className="piano-roll-panel">
+        <div className="piano-roll-panel" data-ctx-track={selectedClip.trackId}>
           <div className="piano-roll-toolbar">
             <div>
               <input value={selectedClip.name} onChange={event => updateClip(selectedClip.id, { name: event.target.value })} />
@@ -191,6 +200,14 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
             </div>
             <label>Start <input type="number" min={0} max={stepCount - selectedClip.length} value={selectedClip.start} onChange={event => updateClip(selectedClip.id, { start: Math.max(0, Math.min(stepCount - selectedClip.length, Number(event.target.value))) })} /></label>
             <label>Length <select value={selectedClip.length} onChange={event => updateClip(selectedClip.id, { length: Number(event.target.value), notes: selectedClip.notes.filter(note => note.start < Number(event.target.value)) })}>{CLIP_LENGTH_OPTIONS.filter(length => length <= stepCount).map(length => <option key={length}>{length}</option>)}</select></label>
+            <label title="Instrument for this block only — the rest of the track keeps its sound">Block sound <select value={selectedClip.gmId ?? 'track'} onChange={event => onSetClipInstrument(selectedClip.id, event.target.value === 'track' ? null : Number(event.target.value))}>
+              <option value="track">Track: {GM_INSTRUMENTS[trackGmInstruments[selectedClip.trackId] ?? 0]?.name}</option>
+              {Object.entries(groupedGm).map(([cat, insts]) => (
+                <optgroup key={cat} label={cat}>
+                  {insts.map(inst => <option key={inst.id} value={inst.id}>{inst.name}</option>)}
+                </optgroup>
+              ))}
+            </select></label>
             <label>Draw <select value={noteLength} onChange={event => setNoteLength(Number(event.target.value))}>{[1, 2, 4, 8].map(length => <option key={length} value={length}>{length} step{length > 1 ? 's' : ''}</option>)}</select></label>
             {selectedNote && (
               <>

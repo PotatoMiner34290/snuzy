@@ -9,6 +9,7 @@ import {
   SoundFontPlayer
 } from './SoundFontEngine';
 import ArrangementView, { type InstrumentClip } from './ArrangementView';
+import ContextMenu, { type CtxItem } from './ContextMenu';
 import { SHOWCASE_SONG } from './ShowcaseSong';
 
 const SHOWCASE_TRACKS = SHOWCASE_SONG.tracks as unknown as TrackDef[];
@@ -503,6 +504,51 @@ function createToneInstrument(type: SynthType): any {
   }
 }
 
+// Instrument picker for the right-click menu: family boxes first, then the
+// family's instruments in the same panel — everything fits, no flyouts.
+function InstrumentPicker({ cats, currentGm, onPick }: {
+  cats: Record<string, { id: number; name: string }[]>;
+  currentGm: number;
+  onPick: (gmId: number) => void;
+}) {
+  const [cat, setCat] = React.useState<string | null>(null);
+  if (!cat) {
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, padding: 4, width: 284 }}>
+        {Object.keys(cats).map(c => (
+          <button
+            key={c}
+            onClick={() => setCat(c)}
+            style={{ padding: '8px 6px', borderRadius: 6, border: '1px solid #3b475d', background: '#222a3b', color: '#dbe2e9', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: 4, width: 284 }}>
+      <button
+        onClick={() => setCat(null)}
+        style={{ width: '100%', marginBottom: 4, padding: '6px 8px', borderRadius: 6, border: '1px solid #3b475d', background: '#283247', color: '#00e5ff', cursor: 'pointer', fontSize: 11, fontWeight: 800, textAlign: 'left' }}
+      >
+        ← All families
+      </button>
+      {(cats[cat] || []).map(inst => (
+        <button
+          key={inst.id}
+          onClick={() => onPick(inst.id)}
+          style={{ display: 'flex', gap: 8, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 5, padding: '7px 10px', cursor: 'pointer', color: '#dbe2e9', fontSize: 12 }}
+        >
+          <span style={{ width: 16, flexShrink: 0, color: '#00e676', fontWeight: 800 }}>{inst.id === currentGm ? '✓' : ''}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const selectStyle: React.CSSProperties = {
   background: '#131722',
   border: '1px solid #2e384d',
@@ -528,7 +574,8 @@ export default function SequencerWorkstation() {
   const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
   const [mutedTracks, setMutedTracks] = useState<Record<string, boolean>>({});
   const [soloTracks, setSoloTracks] = useState<Record<string, boolean>>({});
-  const [midiToast, setMidiToast] = useState<{ visible: boolean; fileName: string }>({ visible: false, fileName: '' });
+  const [midiToast, setMidiToast] = useState<{ visible: boolean; fileName: string; title: string; sub: string }>({ visible: false, fileName: '', title: 'MIDI IMPORTED', sub: 'Mapped to sequencer channels' });
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [trackPresets, setTrackPresets] = useState<Record<string, string>>(() => ({ ...(SHOWCASE_SONG.presets as Record<string, string>) }));
@@ -545,6 +592,7 @@ export default function SequencerWorkstation() {
     Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 0]))
   ));
   const [tapHint, setTapHint] = useState<boolean>(true);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null } | null>(null);
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -563,8 +611,10 @@ export default function SequencerWorkstation() {
 
   const trackChainsRef = useRef<Record<string, { gain: Tone.Gain; pan: Tone.Panner }>>({});
   const trackSynthsRef = useRef<Record<string, { inst: any; type: SynthType }>>({});
+  // Samplers are cached per track AND GM program, so per-block instrument
+  // overrides get their own ready-to-play sampler on the track's strip.
   const trackSamplersRef = useRef<Record<string, Tone.Sampler>>({});
-  const trackSamplerGmRef = useRef<Record<string, number>>({});
+  const samplerKey = (trackId: string, gmId: number) => `${trackId}:${gmId}`;
   const isPlayingRef = useRef<boolean>(false);
   const repeatIdRef = useRef<number | null>(null);
   const stepRef = useRef<number>(0);
@@ -635,12 +685,13 @@ export default function SequencerWorkstation() {
   };
 
   const disposeTrackSampler = (trackId: string) => {
-    const sampler = trackSamplersRef.current[trackId];
-    if (sampler) {
-      try { sampler.dispose(); } catch {}
-      delete trackSamplersRef.current[trackId];
-      delete trackSamplerGmRef.current[trackId];
-    }
+    const prefix = `${trackId}:`;
+    Object.keys(trackSamplersRef.current).forEach(key => {
+      if (key === trackId || key.startsWith(prefix)) {
+        try { trackSamplersRef.current[key].dispose(); } catch {}
+        delete trackSamplersRef.current[key];
+      }
+    });
   };
 
   const disposeTrackSound = (trackId: string) => {
@@ -671,22 +722,20 @@ export default function SequencerWorkstation() {
   };
 
   const ensureTrackSamplerById = async (trackId: string, gmId: number) => {
-    if (trackSamplerGmRef.current[trackId] === gmId && trackSamplersRef.current[trackId]) {
-      return trackSamplersRef.current[trackId];
-    }
-    disposeTrackSampler(trackId);
+    const key = samplerKey(trackId, gmId);
+    const cached = trackSamplersRef.current[key];
+    if (cached) return cached;
     const chain = ensureTrackChain(trackId);
     const player = soundFontPlayerRef.current;
     if (!chain || !player) return null;
     const sampler = await player.createTrackSampler(gmId, chain.gain);
     if (!sampler) return null;
-    // Track may have been removed or re-pointed while loading.
-    if (trackSamplerGmRef.current[trackId] !== undefined && trackSamplerGmRef.current[trackId] !== gmId) {
+    // Track may have been removed while loading.
+    if (!trackChainsRef.current[trackId]) {
       try { sampler.dispose(); } catch {}
-      return trackSamplersRef.current[trackId] ?? null;
+      return null;
     }
-    trackSamplersRef.current[trackId] = sampler;
-    trackSamplerGmRef.current[trackId] = gmId;
+    trackSamplersRef.current[key] = sampler;
     return sampler;
   };
 
@@ -807,6 +856,10 @@ export default function SequencerWorkstation() {
         ensureTrackSynth(track);
       }
     });
+    // Per-block instrument overrides get their samplers ready too.
+    arrangementClips.forEach(clip => {
+      if (clip.gmId !== undefined) ensureTrackSamplerById(clip.trackId, clip.gmId).catch(() => {});
+    });
 
     return () => {
       try {
@@ -817,7 +870,6 @@ export default function SequencerWorkstation() {
       trackChainsRef.current = {};
       trackSynthsRef.current = {};
       trackSamplersRef.current = {};
-      trackSamplerGmRef.current = {};
       try { limiterRef.current?.dispose(); } catch {}
       limiterRef.current = null;
       try { soundFontPlayerRef.current?.dispose(); } catch {}
@@ -842,11 +894,12 @@ export default function SequencerWorkstation() {
 
   // Single trigger path for every track: per-track Tone synth or per-track
   // SoundFont sampler, both routed through the track's mixer strip.
-  const fireTrackSound = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number, duration: string | number = '8n') => {
+  // gmOverride plays this hit with a per-block instrument instead.
+  const fireTrackSound = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number, duration: string | number = '8n', gmOverride?: number) => {
     try {
       if (usesSoundFont(trackDef)) {
-        if (trackSamplerGmRef.current[trackDef.id] === undefined) return;
-        const sampler = trackSamplersRef.current[trackDef.id];
+        const gmId = gmOverride ?? trackGmInstrumentsRef.current[trackDef.id] ?? defaultGmForTrack(trackDef);
+        const sampler = trackSamplersRef.current[samplerKey(trackDef.id, gmId)];
         if (!sampler) return;
         sampler.triggerAttackRelease(currentNote || 'C4', duration, triggerTime, velocity);
         return;
@@ -967,7 +1020,7 @@ export default function SequencerWorkstation() {
               const noteName = midiNoteName(note.pitch);
               const velocity = note.velocity / 127;
               const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
-              fireTrackSound(track, noteName, time, velocity, duration);
+              fireTrackSound(track, noteName, time, velocity, duration, clip.gmId);
             });
           });
         }
@@ -1000,7 +1053,11 @@ export default function SequencerWorkstation() {
             return active;
           });
           const horizontalTarget = cache[step]?.step.find(el => el.classList.contains('pad-cell'));
-          if (autoFollowRef.current && scroller && horizontalTarget) {
+          // Don't yank the grid while a dropdown menu has focus: browsers
+          // instantly dismiss an open <select> popup when an ancestor scrolls.
+          const focusedEl = document.activeElement as HTMLElement | null;
+          const menuOpen = !!focusedEl && focusedEl.tagName === 'SELECT';
+          if (autoFollowRef.current && scroller && horizontalTarget && !menuOpen) {
             const scrollerRect = scroller.getBoundingClientRect();
             const cellRect = horizontalTarget.getBoundingClientRect();
             const stickyControlsWidth = 340;
@@ -1040,6 +1097,9 @@ export default function SequencerWorkstation() {
   };
 
   const togglePad = (trackId: string, stepIdx: number) => {
+    // Release dropdown focus so follow-playhead resumes after menu use.
+    const focused = document.activeElement as HTMLElement | null;
+    if (focused && focused.tagName === 'SELECT') focused.blur();
     setGrid(prev => {
       const row = [...(prev[trackId] || emptyRow(stepCount))];
       row[stepIdx] = !row[stepIdx];
@@ -1200,6 +1260,21 @@ export default function SequencerWorkstation() {
     sampler?.triggerAttackRelease(note, '8n', Tone.now(), (trackVelocityRef.current[track.id] ?? 100) / 127);
   };
 
+  // Per-block instrument: give one clip its own GM sound, or reset it to null
+  // to follow its track again.
+  const setClipInstrument = (clipId: string, gmId: number | null) => {
+    const clip = arrangementClipsRef.current.find(c => c.id === clipId);
+    if (!clip) return;
+    setArrangementClips(prev => prev.map(c => {
+      if (c.id !== clipId) return c;
+      const next = { ...c };
+      if (gmId === null) delete next.gmId;
+      else next.gmId = gmId;
+      return next;
+    }));
+    if (gmId !== null) ensureTrackSamplerById(clip.trackId, gmId).catch(() => {});
+  };
+
   const applyInstrumentToAll = async (gmId: number) => {
     setApplyAllGm(gmId);
     setTrackEngine(prev => {
@@ -1290,6 +1365,11 @@ export default function SequencerWorkstation() {
           midiTrack.channel = Math.min(15, clipIndex);
           midiTrack.instrument.number = gmId;
           const mix = (trackVolume[track.id] ?? 100) / 100;
+          const clipGm = clip.gmId ?? gmId;
+          midiTrack.instrument.number = clipGm;
+          if (clip.gmId !== undefined) {
+            midiTrack.name = `${track.name} — ${clip.name} (${GM_INSTRUMENTS[clipGm]?.name ?? 'custom'})`;
+          }
           clip.notes.forEach(note => {
             midiTrack.addNote({
               midi: note.pitch,
@@ -1368,13 +1448,58 @@ export default function SequencerWorkstation() {
     }
   };
 
-  const showToast = (fileName: string, ms = 3500) => {
+  const showToast = (fileName: string, title = 'MIDI IMPORTED', sub = 'Mapped to sequencer channels', ms = 3500) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setMidiToast({ visible: true, fileName });
+    setMidiToast({ visible: true, fileName, title, sub });
     toastTimerRef.current = setTimeout(() => {
       setMidiToast(prev => ({ ...prev, visible: false }));
     }, ms);
   };
+
+  // Whole-site right-click handling (no native menu / Inspect anywhere):
+  // right-click on tracks/blocks opens their toolbox, anywhere else
+  // (including the page sides) opens the Song tools menu.
+  useEffect(() => {
+    const onCtx = (e: MouseEvent) => {
+      e.preventDefault();
+      const el = e.target as HTMLElement;
+      // Leave text-field editing alone.
+      if (el.closest?.('.piano-roll-toolbar')) return;
+      const clipEl = el.closest?.('[data-ctx-clip]');
+      const trackEl = el.closest?.('[data-ctx-track]');
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        trackId: trackEl ? trackEl.getAttribute('data-ctx-track') : null,
+        clipId: clipEl ? clipEl.getAttribute('data-ctx-clip') : null,
+      });
+    };
+    window.addEventListener('contextmenu', onCtx);
+    return () => window.removeEventListener('contextmenu', onCtx);
+  }, []);
+
+  // Rescue click: clicking the page background (outside the workspace)
+  // clears every mute and solo so the full song plays again.
+  // Arm states are left untouched — this only unmutes/unsolos.
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (document.querySelector('.ctx-menu')) return;
+      // Clicks from an already-closed menu hit a detached node — ignore them,
+      // or picking Solo/Mute from the menu would instantly undo itself.
+      if (!(e.target instanceof Node) || !e.target.isConnected) return;
+      const root = workspaceRef.current;
+      if (root && root.contains(e.target)) return;
+      const hasMute = Object.values(mutedTracksRef.current).some(Boolean);
+      const hasSolo = Object.values(soloTracksRef.current).some(Boolean);
+      if (!hasMute && !hasSolo) return;
+      setMutedTracks({});
+      setSoloTracks({});
+      showToast('Muted and soloed tracks reset — everything plays', 'FULL MIX', '', 2500);
+    };
+    window.addEventListener('click', onClick);
+    return () => window.removeEventListener('click', onClick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const applyProjectData = (data: any, label: string) => {
     if (typeof data.bpm === 'number') setBpm(data.bpm);
@@ -1621,10 +1746,115 @@ export default function SequencerWorkstation() {
     }
   };
 
+  // ── Right-click toolbox ──────────────────────────────────────────────────
+  // Boxed family picker rendered in-panel — no off-screen flyouts.
+  const instrumentSubmenu = (currentGm: number, onPick: (gmId: number) => void): CtxItem[] => ([
+    {
+      custom: (
+        <InstrumentPicker
+          cats={groupedGmInstruments}
+          currentGm={currentGm}
+          onPick={gmId => { onPick(gmId); setCtxMenu(null); }}
+        />
+      ),
+    },
+  ]);
+
+  const buildTrackMenu = (track: TrackDef): CtxItem[] => {
+    const engine = trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth');
+    const currentGm = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
+    const gmName = GM_INSTRUMENTS[currentGm]?.name || 'instrument';
+    const activePreset = trackPresets[track.id] || track.presets[0]?.id;
+    const canUseSynth = track.type !== 'soundfont';
+    return [
+      { label: track.name, header: true },
+      { label: 'Preview sound', hint: 'click', onClick: () => triggerInstrument(track) },
+      { separator: true, label: '' },
+      { label: 'Armed', checked: selectedTracks.includes(track.id), onClick: () => toggleTrackSelect(track.id) },
+      { label: mutedTracks[track.id] ? 'Unmute' : 'Mute', checked: !!mutedTracks[track.id], onClick: () => setMutedTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })) },
+      { label: soloTracks[track.id] ? 'Unsolo' : 'Solo', checked: !!soloTracks[track.id], onClick: () => setSoloTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })) },
+      { label: holdTones[track.id] ? 'Unhold' : 'Hold', checked: !!holdTones[track.id], onClick: () => toggleHold(track.id) },
+      { separator: true, label: '' },
+      {
+        label: 'Engine', hint: engine === 'soundfont' ? 'GM' : 'Tone',
+        submenu: [
+          ...(canUseSynth ? [{ label: 'Tone synth', checked: engine === 'synth', onClick: () => setChannelEngine(track, 'synth' as TrackEngine) }] : []),
+          { label: 'GM SoundFont', checked: engine === 'soundfont', onClick: () => setChannelEngine(track, 'soundfont' as TrackEngine) },
+        ],
+      },
+      { label: 'Instrument', hint: gmName, submenu: instrumentSubmenu(currentGm, gmId => setChannelInstrument(track, gmId)) },
+      {
+        label: 'Note / pitch', hint: activePreset,
+        submenu: (engine === 'soundfont' ? MIDI_NOTE_PRESETS : track.presets).map(p => ({
+          label: p.note || p.name, checked: p.id === activePreset,
+          onClick: () => setTrackPresets(prev => ({ ...prev, [track.id]: p.id })),
+        })),
+      },
+      {
+        label: 'Velocity', hint: `V${trackVelocity[track.id] ?? 100}`,
+        submenu: [127, 110, 100, 85, 70, 55, 40, 25].map(v => ({
+          label: `V${v}`, checked: (trackVelocity[track.id] ?? 100) === v,
+          onClick: () => setTrackVelocity(prev => ({ ...prev, [track.id]: v })),
+        })),
+      },
+      { label: 'Volume', slider: { min: 0, max: 100, value: trackVolume[track.id] ?? 100, accent: track.color, onChange: v => setTrackVolumeLive(track.id, v) } },
+      { label: 'Pan', slider: { min: -50, max: 50, value: trackPan[track.id] ?? 0, onChange: v => setTrackPanLive(track.id, v) } },
+      { separator: true, label: '' },
+      { label: `Use ${gmName} for ALL tracks`, hint: 'whole song', onClick: () => applyInstrumentToAll(currentGm) },
+      { label: 'Remove track', danger: true, disabled: tracks.length <= 1, onClick: () => removeChannel(track.id) },
+    ];
+  };
+
+  const buildGlobalMenu = (): CtxItem[] => ([
+    { label: 'Song tools', header: true },
+    { label: isPlaying ? 'Stop' : 'Play', hint: isPlaying ? '■' : '▶', onClick: () => togglePlayback() },
+    { separator: true, label: '' },
+    {
+      label: 'Play everything: unmute + unsolo', hint: 'full mix',
+      onClick: () => {
+        setMutedTracks({});
+        setSoloTracks({});
+        showToast('Muted and soloed tracks reset — everything plays', 'FULL MIX', '', 2500);
+      },
+    },
+    { label: 'All tracks → instrument', submenu: instrumentSubmenu(applyAllGm, gmId => applyInstrumentToAll(gmId)) },
+    { separator: true, label: '' },
+    { label: 'Arrangement view', checked: activeView === 'arrangement', onClick: () => setActiveView('arrangement') },
+    { label: 'Step sequencer view', checked: activeView === 'steps', onClick: () => setActiveView('steps') },
+    { label: 'Extend timeline +4 bars', onClick: () => extendTimeline(64) },
+    { label: 'Extend timeline +16 bars', onClick: () => extendTimeline(256) },
+    { separator: true, label: '' },
+    { label: 'Clear pattern', danger: true, onClick: () => clearGrid() },
+  ]);
+
   const gridTemplate = `268px 56px repeat(${stepCount}, minmax(18px, 1fr))`;
 
+  const ctxTrack = ctxMenu?.trackId ? tracks.find(t => t.id === ctxMenu.trackId) ?? null : null;
+  const ctxClip = ctxMenu?.clipId ? arrangementClips.find(c => c.id === ctxMenu.clipId) ?? null : null;
+  const buildBlockMenu = (): CtxItem[] => {
+    if (!ctxClip) return [];
+    const trackDefault = trackGmInstruments[ctxClip.trackId] ?? 0;
+    const effective = ctxClip.gmId ?? trackDefault;
+    return [
+      { label: `Block: ${ctxClip.name}`, header: true },
+      {
+        label: 'Block instrument', hint: GM_INSTRUMENTS[effective]?.name ?? '',
+        submenu: [
+          {
+            label: `Track default (${GM_INSTRUMENTS[trackDefault]?.name ?? 'instrument'})`,
+            checked: ctxClip.gmId === undefined,
+            onClick: () => setClipInstrument(ctxClip.id, null),
+          },
+          { separator: true, label: '' },
+          ...instrumentSubmenu(effective, gmId => setClipInstrument(ctxClip.id, gmId)),
+        ],
+      },
+      { separator: true, label: '' },
+    ];
+  };
+
   return (
-    <div style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 16px' }}>
+    <div ref={workspaceRef} style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 16px' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 26, color: '#00e5ff', fontWeight: 800, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0 }}>
@@ -1861,7 +2091,7 @@ export default function SequencerWorkstation() {
       </div>
 
       {activeView === 'arrangement' ? (
-        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={setArrangementClips} onExtend={extendTimeline} />
+        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={setArrangementClips} onExtend={extendTimeline} trackGmInstruments={trackGmInstruments} onSetClipInstrument={setClipInstrument} />
       ) : <>
       <div className="timeline-toolbar">
         <div>
@@ -1910,6 +2140,7 @@ export default function SequencerWorkstation() {
             return (
               <div
                 key={track.id}
+                data-ctx-track={track.id}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: gridTemplate,
@@ -2206,7 +2437,7 @@ export default function SequencerWorkstation() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ color: '#00e676', fontWeight: 800, fontSize: 13, letterSpacing: '0.5px' }}>
-              MIDI IMPORTED
+              {midiToast.title}
             </div>
             <div
               style={{
@@ -2221,9 +2452,11 @@ export default function SequencerWorkstation() {
             >
               {midiToast.fileName}
             </div>
-            <div style={{ color: '#546e7a', fontSize: 10, marginTop: 4 }}>
-              Mapped to sequencer channels
-            </div>
+            {midiToast.sub !== '' && (
+              <div style={{ color: '#546e7a', fontSize: 10, marginTop: 4 }}>
+                {midiToast.sub}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2249,6 +2482,15 @@ export default function SequencerWorkstation() {
         >
           Tap anywhere to play
         </div>
+      )}
+
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={ctxTrack ? [...buildBlockMenu(), ...buildTrackMenu(ctxTrack)] : buildGlobalMenu()}
+          onClose={() => setCtxMenu(null)}
+        />
       )}
     </div>
   );
