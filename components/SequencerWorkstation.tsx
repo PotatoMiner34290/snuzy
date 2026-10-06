@@ -741,6 +741,7 @@ export default function SequencerWorkstation() {
 
   const setTrackVolumeLive = (trackId: string, v: number) => {
     const vol = Math.max(0, Math.min(100, Math.round(v)));
+    pushHistory();
     setTrackVolume(prev => ({ ...prev, [trackId]: vol }));
     const chain = trackChainsRef.current[trackId];
     if (chain) {
@@ -750,6 +751,7 @@ export default function SequencerWorkstation() {
 
   const setTrackPanLive = (trackId: string, p: number) => {
     const pan = Math.max(-50, Math.min(50, Math.round(p)));
+    pushHistory();
     setTrackPan(prev => ({ ...prev, [trackId]: pan }));
     const chain = trackChainsRef.current[trackId];
     if (chain) {
@@ -784,6 +786,8 @@ export default function SequencerWorkstation() {
       if (done) return;
       const target = e.target as HTMLElement | null;
       if (e.type === 'pointerdown' && target?.closest?.('.btn-playback')) return;
+      // Editing keys (block delete, undo/redo, text fields) must never start playback.
+      if (e instanceof KeyboardEvent && (e.key === 'Delete' || e.key === 'Backspace' || e.ctrlKey || e.metaKey)) return;
       if (e.type === 'keydown' && document.activeElement instanceof HTMLButtonElement) return;
       done = true;
       setTapHint(false);
@@ -799,6 +803,24 @@ export default function SequencerWorkstation() {
       window.removeEventListener('pointerdown', autoStart);
       window.removeEventListener('keydown', autoStart);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Ctrl/Cmd+Z undo, Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) redo.
+  // Skipped inside text fields so native text undo keeps working.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'z' && k !== 'y') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      e.preventDefault();
+      if (k === 'z' && !e.shiftKey) undo();
+      else redo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { mutedTracksRef.current = mutedTracks; }, [mutedTracks]);
@@ -958,14 +980,15 @@ export default function SequencerWorkstation() {
     return true;
   };
 
-  const stopTransport = () => {
+  // Pause keeps the playhead position; full stop rewinds to the start.
+  const pauseTransport = (reset: boolean) => {
     Tone.Transport.stop();
     if (repeatIdRef.current !== null) {
       Tone.Transport.clear(repeatIdRef.current);
       repeatIdRef.current = null;
     }
     setIsPlaying(false);
-    stepRef.current = 0;
+    if (reset) stepRef.current = 0;
     const cache = stepColCacheRef.current;
     if (cache.length > 0) {
       cache.forEach(c => c.step.forEach(el => {
@@ -978,18 +1001,50 @@ export default function SequencerWorkstation() {
         el.classList.remove('note-playing');
       });
     }
+    if (reset) {
+      const playhead = document.querySelector<HTMLElement>('[data-arrangement-playhead]');
+      if (playhead) playhead.style.left = '180px';
+      gridScrollRef.current?.scrollTo({ left: 0 });
+    }
+  };
+
+  const stopTransport = () => pauseTransport(true);
+
+  // Jump the playhead to any step. Works paused or mid-playback — the next
+  // scheduled tick continues from the new position.
+  const seekToStep = (step: number) => {
+    const steps = stepCountRef.current;
+    const s = Math.max(0, Math.min(steps - 1, Math.floor(step)));
+    stepRef.current = s;
+    document.querySelectorAll('.step-current, .note-playing').forEach(el => {
+      el.classList.remove('step-current');
+      el.classList.remove('note-playing');
+    });
+    refreshStepColCache();
+    stepColCacheRef.current[s]?.step.forEach(el => el.classList.add('step-current'));
+    const playhead = document.querySelector<HTMLElement>('[data-arrangement-playhead]');
+    const canvas = playhead?.parentElement;
+    if (playhead && canvas) {
+      playhead.style.left = `${180 + (s / steps) * (canvas.clientWidth - 180)}px`;
+    }
+    const scroller = gridScrollRef.current;
+    const target = stepColCacheRef.current[s]?.step.find(el => el.classList.contains('pad-cell'));
+    if (scroller && target) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const cellRect = target.getBoundingClientRect();
+      scroller.scrollTo({ left: Math.max(0, scroller.scrollLeft + cellRect.left - scrollerRect.left - scroller.clientWidth / 2) });
+    }
   };
 
   const togglePlayback = async () => {
     try {
       if (isPlaying) {
-        stopTransport();
+        pauseTransport(false);
         return;
       }
 
       await Tone.start();
       Tone.Transport.bpm.value = bpmRef.current;
-      stepRef.current = 0;
       refreshStepColCache();
 
       repeatIdRef.current = Tone.Transport.scheduleRepeat((time: number) => {
@@ -1100,6 +1155,7 @@ export default function SequencerWorkstation() {
     // Release dropdown focus so follow-playhead resumes after menu use.
     const focused = document.activeElement as HTMLElement | null;
     if (focused && focused.tagName === 'SELECT') focused.blur();
+    pushHistory();
     setGrid(prev => {
       const row = [...(prev[trackId] || emptyRow(stepCount))];
       row[stepIdx] = !row[stepIdx];
@@ -1108,12 +1164,14 @@ export default function SequencerWorkstation() {
   };
 
   const toggleTrackSelect = (trackId: string) => {
+    pushHistory();
     setSelectedTracks(prev =>
       prev.includes(trackId) ? prev.filter(id => id !== trackId) : [...prev, trackId]
     );
   };
 
   const toggleHold = (trackId: string) => {
+    pushHistory();
     setHoldTones(prev => {
       const next = { ...prev, [trackId]: !prev[trackId] };
       if (next[trackId] && !isPlaying) {
@@ -1126,6 +1184,7 @@ export default function SequencerWorkstation() {
 
   const resizeGrid = (nextSteps: number) => {
     nextSteps = normalizeStepCount(nextSteps);
+    if (nextSteps !== stepCountRef.current) pushHistory();
     setGrid(prev => {
       const next: Record<string, boolean[]> = {};
       Object.keys(prev).forEach(id => {
@@ -1147,6 +1206,7 @@ export default function SequencerWorkstation() {
   };
 
   const clearGrid = () => {
+    pushHistory();
     const empty: Record<string, boolean[]> = {};
     tracks.forEach(t => {
       empty[t.id] = emptyRow(stepCount);
@@ -1174,6 +1234,7 @@ export default function SequencerWorkstation() {
       presets: src.type === 'soundfont' || !template ? MIDI_NOTE_PRESETS : [...src.presets]
     };
     const gmId = defaultGmForTrack(track);
+    pushHistory();
     setTracks(prev => [...prev, track]);
     setGrid(prev => ({ ...prev, [id]: emptyRow(stepCount) }));
     setSelectedTracks(prev => [...prev, id]);
@@ -1190,6 +1251,7 @@ export default function SequencerWorkstation() {
 
   const removeChannel = (trackId: string) => {
     if (tracks.length <= 1) return;
+    pushHistory();
     setTracks(prev => prev.filter(t => t.id !== trackId));
     setSelectedTracks(prev => prev.filter(id => id !== trackId));
     setArrangementClips(prev => prev.filter(clip => clip.trackId !== trackId));
@@ -1227,6 +1289,7 @@ export default function SequencerWorkstation() {
   };
 
   const setChannelEngine = (track: TrackDef, engine: TrackEngine) => {
+    pushHistory();
     setTrackEngine(prev => ({ ...prev, [track.id]: engine }));
     if (engine === 'soundfont') {
       disposeTrackSynth(track.id);
@@ -1244,6 +1307,7 @@ export default function SequencerWorkstation() {
   };
 
   const setChannelInstrument = async (track: TrackDef, gmId: number) => {
+    pushHistory();
     setTrackGmInstruments(prev => ({ ...prev, [track.id]: gmId }));
     setTrackEngine(prev => ({ ...prev, [track.id]: 'soundfont' }));
     const gm = GM_INSTRUMENTS[gmId];
@@ -1265,6 +1329,7 @@ export default function SequencerWorkstation() {
   const setClipInstrument = (clipId: string, gmId: number | null) => {
     const clip = arrangementClipsRef.current.find(c => c.id === clipId);
     if (!clip) return;
+    pushHistory();
     setArrangementClips(prev => prev.map(c => {
       if (c.id !== clipId) return c;
       const next = { ...c };
@@ -1276,6 +1341,7 @@ export default function SequencerWorkstation() {
   };
 
   const applyInstrumentToAll = async (gmId: number) => {
+    pushHistory();
     setApplyAllGm(gmId);
     setTrackEngine(prev => {
       const next = { ...prev };
@@ -1456,6 +1522,136 @@ export default function SequencerWorkstation() {
     }, ms);
   };
 
+  // ── Undo / redo: full-song snapshots ─────────────────────────────────────
+  interface SongSnapshot {
+    bpm: number;
+    stepCount: number;
+    tracks: TrackDef[];
+    grid: Record<string, boolean[]>;
+    trackPresets: Record<string, string>;
+    trackGmInstruments: Record<string, number>;
+    trackEngine: Record<string, TrackEngine>;
+    trackVelocity: Record<string, number>;
+    trackVolume: Record<string, number>;
+    trackPan: Record<string, number>;
+    selectedTracks: string[];
+    holdTones: Record<string, boolean>;
+    mutedTracks: Record<string, boolean>;
+    soloTracks: Record<string, boolean>;
+    arrangementClips: InstrumentClip[];
+  }
+
+  const MAX_HISTORY = 50;
+  const pastRef = useRef<SongSnapshot[]>([]);
+  const futureRef = useRef<SongSnapshot[]>([]);
+  const lastPushRef = useRef<number>(0);
+  const [histLen, setHistLen] = useState({ past: 0, future: 0 });
+
+  const currentSnapshot = (): SongSnapshot => ({
+    bpm: bpmRef.current,
+    stepCount: stepCountRef.current,
+    tracks: tracksRef.current,
+    grid: gridRef.current,
+    trackPresets: trackPresetsRef.current,
+    trackGmInstruments: trackGmInstrumentsRef.current,
+    trackEngine: trackEngineRef.current,
+    trackVelocity: trackVelocityRef.current,
+    trackVolume: trackVolumeRef.current,
+    trackPan: trackPanRef.current,
+    selectedTracks: selectedTracksRef.current,
+    holdTones: holdTonesRef.current,
+    mutedTracks: mutedTracksRef.current,
+    soloTracks: soloTracksRef.current,
+    arrangementClips: arrangementClipsRef.current,
+  });
+
+  // Pushes the CURRENT (pre-edit) state. Calls closer than 1s apart coalesce,
+  // so one block drag or slider sweep is a single undo step.
+  const pushHistory = () => {
+    const now = Date.now();
+    if (now - lastPushRef.current < 1000) return;
+    lastPushRef.current = now;
+    try {
+      pastRef.current.push(structuredClone(currentSnapshot()));
+    } catch {
+      return;
+    }
+    if (pastRef.current.length > MAX_HISTORY) pastRef.current.shift();
+    futureRef.current = [];
+    setHistLen({ past: pastRef.current.length, future: 0 });
+  };
+
+  const syncTrackSounds = (
+    list: TrackDef[],
+    gmMap: Record<string, number>,
+    engMap: Record<string, TrackEngine>,
+    volMap: Record<string, number>,
+    panMap: Record<string, number>
+  ) => {
+    const ids = new Set(list.map(t => t.id));
+    Object.keys(trackChainsRef.current).forEach(id => {
+      if (!ids.has(id)) disposeTrackChain(id);
+    });
+    list.forEach(t => {
+      const chain = ensureTrackChain(t.id);
+      if (chain) {
+        try {
+          chain.gain.gain.rampTo(volToGain(volMap[t.id] ?? 100), 0.03);
+          chain.pan.pan.rampTo(panToPan(panMap[t.id] ?? 0), 0.03);
+        } catch {}
+      }
+      const eng = engMap[t.id] ?? (t.type === 'soundfont' ? 'soundfont' : 'synth');
+      if (eng === 'soundfont') {
+        ensureTrackSamplerById(t.id, gmMap[t.id] ?? defaultGmForTrack(t)).catch(() => {});
+      } else {
+        ensureTrackSynth(t);
+      }
+    });
+  };
+
+  const applySnapshot = (snap: SongSnapshot) => {
+    setBpm(snap.bpm);
+    stepCountRef.current = snap.stepCount;
+    setStepCount(snap.stepCount);
+    setTracks(snap.tracks);
+    setGrid(snap.grid);
+    setTrackPresets(snap.trackPresets);
+    setTrackGmInstruments(snap.trackGmInstruments);
+    setTrackEngine(snap.trackEngine);
+    setTrackVelocity(snap.trackVelocity);
+    setTrackVolume(snap.trackVolume);
+    setTrackPan(snap.trackPan);
+    setSelectedTracks(snap.selectedTracks);
+    setHoldTones(snap.holdTones);
+    setMutedTracks(snap.mutedTracks);
+    setSoloTracks(snap.soloTracks);
+    setArrangementClips(snap.arrangementClips);
+    stepColCacheRef.current = [];
+    syncTrackSounds(snap.tracks, snap.trackGmInstruments, snap.trackEngine, snap.trackVolume, snap.trackPan);
+  };
+
+  const undo = () => {
+    const past = pastRef.current;
+    if (past.length === 0) return;
+    try {
+      futureRef.current.push(structuredClone(currentSnapshot()));
+    } catch { return; }
+    const snap = past.pop()!;
+    applySnapshot(snap);
+    setHistLen({ past: past.length, future: futureRef.current.length });
+  };
+
+  const redo = () => {
+    const future = futureRef.current;
+    if (future.length === 0) return;
+    try {
+      pastRef.current.push(structuredClone(currentSnapshot()));
+    } catch { return; }
+    const snap = future.pop()!;
+    applySnapshot(snap);
+    setHistLen({ past: pastRef.current.length, future: future.length });
+  };
+
   // Whole-site right-click handling (no native menu / Inspect anywhere):
   // right-click on tracks/blocks opens their toolbox, anywhere else
   // (including the page sides) opens the Song tools menu.
@@ -1494,6 +1690,7 @@ export default function SequencerWorkstation() {
       if (!hasMute && !hasSolo) return;
       setMutedTracks({});
       setSoloTracks({});
+      pushHistory();
       showToast('Muted and soloed tracks reset — everything plays', 'FULL MIX', '', 2500);
     };
     window.addEventListener('click', onClick);
@@ -1502,6 +1699,7 @@ export default function SequencerWorkstation() {
   }, []);
 
   const applyProjectData = (data: any, label: string) => {
+    pushHistory();
     if (typeof data.bpm === 'number') setBpm(data.bpm);
     if (typeof data.stepCount === 'number') {
       const importedStepCount = normalizeStepCount(data.stepCount);
@@ -1563,6 +1761,7 @@ export default function SequencerWorkstation() {
   const applyMidiObject = (imported: Midi, fileName: string) => {
     if (isPlaying) stopTransport();
     stepColCacheRef.current = [];
+    pushHistory();
 
     const ppq = imported.header.ppq || 480;
     const ticksPer16th = ppq / 4;
@@ -1771,8 +1970,8 @@ export default function SequencerWorkstation() {
       { label: 'Preview sound', hint: 'click', onClick: () => triggerInstrument(track) },
       { separator: true, label: '' },
       { label: 'Armed', checked: selectedTracks.includes(track.id), onClick: () => toggleTrackSelect(track.id) },
-      { label: mutedTracks[track.id] ? 'Unmute' : 'Mute', checked: !!mutedTracks[track.id], onClick: () => setMutedTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })) },
-      { label: soloTracks[track.id] ? 'Unsolo' : 'Solo', checked: !!soloTracks[track.id], onClick: () => setSoloTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })) },
+      { label: mutedTracks[track.id] ? 'Unmute' : 'Mute', checked: !!mutedTracks[track.id], onClick: () => { pushHistory(); setMutedTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })); } },
+      { label: soloTracks[track.id] ? 'Unsolo' : 'Solo', checked: !!soloTracks[track.id], onClick: () => { pushHistory(); setSoloTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })); } },
       { label: holdTones[track.id] ? 'Unhold' : 'Hold', checked: !!holdTones[track.id], onClick: () => toggleHold(track.id) },
       { separator: true, label: '' },
       {
@@ -1787,14 +1986,14 @@ export default function SequencerWorkstation() {
         label: 'Note / pitch', hint: activePreset,
         submenu: (engine === 'soundfont' ? MIDI_NOTE_PRESETS : track.presets).map(p => ({
           label: p.note || p.name, checked: p.id === activePreset,
-          onClick: () => setTrackPresets(prev => ({ ...prev, [track.id]: p.id })),
+          onClick: () => { pushHistory(); setTrackPresets(prev => ({ ...prev, [track.id]: p.id })); },
         })),
       },
       {
         label: 'Velocity', hint: `V${trackVelocity[track.id] ?? 100}`,
         submenu: [127, 110, 100, 85, 70, 55, 40, 25].map(v => ({
           label: `V${v}`, checked: (trackVelocity[track.id] ?? 100) === v,
-          onClick: () => setTrackVelocity(prev => ({ ...prev, [track.id]: v })),
+          onClick: () => { pushHistory(); setTrackVelocity(prev => ({ ...prev, [track.id]: v })); },
         })),
       },
       { label: 'Volume', slider: { min: 0, max: 100, value: trackVolume[track.id] ?? 100, accent: track.color, onChange: v => setTrackVolumeLive(track.id, v) } },
@@ -1812,6 +2011,7 @@ export default function SequencerWorkstation() {
     {
       label: 'Play everything: unmute + unsolo', hint: 'full mix',
       onClick: () => {
+        pushHistory();
         setMutedTracks({});
         setSoloTracks({});
         showToast('Muted and soloed tracks reset — everything plays', 'FULL MIX', '', 2500);
@@ -1955,23 +2155,43 @@ export default function SequencerWorkstation() {
             </div>
           </div>
 
-          <button
-            onClick={togglePlayback}
-            className="btn-playback"
-            style={{
-              padding: '10px 24px',
-              fontSize: 15,
-              fontWeight: 800,
-              borderRadius: 8,
-              border: 'none',
-              cursor: 'pointer',
-              backgroundColor: isPlaying ? '#ff4b4b' : '#00e676',
-              color: '#000',
-              boxShadow: isPlaying ? '0 0 16px #ff4b4b' : '0 0 16px #00e676'
-            }}
-          >
-            {isPlaying ? '■ STOP' : '▶ PLAY'}
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              onClick={togglePlayback}
+              className="btn-playback"
+              title={isPlaying ? 'Pause (keeps position)' : stepRef.current > 0 ? 'Resume where you paused' : 'Play from here'}
+              style={{
+                padding: '10px 24px',
+                fontSize: 15,
+                fontWeight: 800,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: isPlaying ? '#ffd600' : '#00e676',
+                color: '#000',
+                boxShadow: isPlaying ? '0 0 16px #ffd600' : '0 0 16px #00e676'
+              }}
+            >
+              {isPlaying ? '❚❚ PAUSE' : stepRef.current > 0 ? '▶ RESUME' : '▶ PLAY'}
+            </button>
+            <button
+              onClick={() => pauseTransport(true)}
+              className="btn-toolbar"
+              title="Stop and rewind to the start"
+              style={{
+                padding: '10px 14px',
+                fontSize: 14,
+                fontWeight: 800,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: '#ff4b4b',
+                color: '#000'
+              }}
+            >
+              ■
+            </button>
+          </div>
         </div>
       </header>
 
@@ -2032,6 +2252,24 @@ export default function SequencerWorkstation() {
           >
             Clear Pattern
           </button>
+          <button
+            onClick={undo}
+            disabled={histLen.past === 0}
+            className="btn-toolbar"
+            title="Undo (Ctrl+Z)"
+            style={{ padding: '6px 12px', background: '#262f40', color: histLen.past === 0 ? '#546e7a' : '#eee', border: 'none', borderRadius: 4, cursor: histLen.past === 0 ? 'default' : 'pointer' }}
+          >
+            ↩ Undo
+          </button>
+          <button
+            onClick={redo}
+            disabled={histLen.future === 0}
+            className="btn-toolbar"
+            title="Redo (Ctrl+Y)"
+            style={{ padding: '6px 12px', background: '#262f40', color: histLen.future === 0 ? '#546e7a' : '#eee', border: 'none', borderRadius: 4, cursor: histLen.future === 0 ? 'default' : 'pointer' }}
+          >
+            ↪ Redo
+          </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#90a4ae' }}>
             Set all to
             <select
@@ -2091,7 +2329,7 @@ export default function SequencerWorkstation() {
       </div>
 
       {activeView === 'arrangement' ? (
-        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={setArrangementClips} onExtend={extendTimeline} trackGmInstruments={trackGmInstruments} onSetClipInstrument={setClipInstrument} />
+        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={updater => { pushHistory(); setArrangementClips(updater); }} onExtend={extendTimeline} trackGmInstruments={trackGmInstruments} onSetClipInstrument={setClipInstrument} onSeekStep={seekToStep} />
       ) : <>
       <div className="timeline-toolbar">
         <div>
@@ -2165,7 +2403,7 @@ export default function SequencerWorkstation() {
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0 }}>
                     <button
-                      onClick={() => setMutedTracks(prev => ({ ...prev, [track.id]: !prev[track.id] }))}
+                      onClick={() => { pushHistory(); setMutedTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })); }}
                       title="Mute channel"
                       style={{
                         width: 22, height: 18, fontSize: 9, fontWeight: 800, borderRadius: 3, cursor: 'pointer',
@@ -2175,7 +2413,7 @@ export default function SequencerWorkstation() {
                       M
                     </button>
                     <button
-                      onClick={() => setSoloTracks(prev => ({ ...prev, [track.id]: !prev[track.id] }))}
+                      onClick={() => { pushHistory(); setSoloTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })); }}
                       title="Solo channel"
                       style={{
                         width: 22, height: 18, fontSize: 9, fontWeight: 800, borderRadius: 3, cursor: 'pointer',
@@ -2249,7 +2487,7 @@ export default function SequencerWorkstation() {
 
                       <select
                         value={activePreset}
-                        onChange={e => setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value }))}
+                        onChange={e => { pushHistory(); setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value })); }}
                         style={{ ...selectStyle, color: '#b0bec5', width: 58, flexShrink: 0 }}
                         title="Note / pitch"
                       >
@@ -2260,7 +2498,7 @@ export default function SequencerWorkstation() {
 
                       <select
                         value={trackVelocity[track.id] ?? 100}
-                        onChange={e => setTrackVelocity(prev => ({ ...prev, [track.id]: Number(e.target.value) }))}
+                        onChange={e => { pushHistory(); setTrackVelocity(prev => ({ ...prev, [track.id]: Number(e.target.value) })); }}
                         style={{ ...selectStyle, color: '#80cbc4', width: 52, flexShrink: 0 }}
                         title="MIDI velocity"
                       >
@@ -2378,7 +2616,9 @@ export default function SequencerWorkstation() {
                 key={i}
                 className={`step-num step-col-${i} ${i % STEPS_PER_BAR === 0 ? 'bar-start' : ''}`}
                 data-sequencer-step={i}
-                title={`Bar ${Math.floor(i / STEPS_PER_BAR) + 1}, step ${(i % STEPS_PER_BAR) + 1}`}
+                title={`Play from here — Bar ${Math.floor(i / STEPS_PER_BAR) + 1}, step ${(i % STEPS_PER_BAR) + 1}`}
+                onClick={() => seekToStep(i)}
+                style={{ cursor: 'pointer' }}
               >
                 {i % STEPS_PER_BAR === 0 ? `B${Math.floor(i / STEPS_PER_BAR) + 1}` : i + 1}
               </div>

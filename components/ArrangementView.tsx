@@ -33,6 +33,7 @@ interface Props {
   onExtend?: (extraSteps: number) => void;
   trackGmInstruments: Record<string, number>;
   onSetClipInstrument: (clipId: string, gmId: number | null) => void;
+  onSeekStep?: (step: number) => void;
 }
 
 const PITCH_LOW = 21;
@@ -43,7 +44,7 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 const pitchName = (pitch: number) => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
 const uid = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-export default function ArrangementView({ tracks, stepCount, clips, setClips, onExtend, trackGmInstruments, onSetClipInstrument }: Props) {
+export default function ArrangementView({ tracks, stepCount, clips, setClips, onExtend, trackGmInstruments, onSetClipInstrument, onSeekStep }: Props) {
   const groupedGm = useMemo(() => getInstrumentsByCategory(), []);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(clips[0]?.id ?? null);
   const [noteLength, setNoteLength] = useState(1);
@@ -142,10 +143,135 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
     setSelectedNoteId(null);
   };
 
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [painting, setPainting] = useState<{ trackId: string; start: number; length: number } | null>(null);
+
+  // Del / Backspace removes the selected block (never while typing in a field).
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (!selectedClipId) return;
+      e.preventDefault();
+      setClips(previous => previous.filter(clip => clip.id !== selectedClipId));
+      setSelectedClipId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedClipId, setClips]);
+
+  const stepFromClientX = (laneEl: HTMLElement, clientX: number) => {
+    const rect = laneEl.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    return Math.round(ratio * stepCount);
+  };
+
+  // Deliberate creation only: click-drag across empty lane space paints a
+  // new block (snapped to bars), double-click drops a quick 1-bar block.
+  // A plain single click just deselects — no more accidental block spam.
+  const onLanePointerDown = (trackId: string, e: React.PointerEvent) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('.instrument-clip, .lane-add')) return;
+    // No preventDefault here: it would eat the clicks double-click-to-add needs.
+    const laneEl = e.currentTarget as HTMLElement;
+    const anchor = Math.min(Math.floor(stepFromClientX(laneEl, e.clientX) / 16) * 16, Math.max(0, stepCount - 16));
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let ghost: { trackId: string; start: number; length: number } | null = null;
+    const move = (ev: PointerEvent) => {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+      const atStep = Math.min(Math.floor(stepFromClientX(laneEl, ev.clientX) / 16) * 16, Math.max(0, stepCount - 16));
+      const start = Math.min(anchor, atStep);
+      const length = Math.max(16, Math.abs(atStep - anchor) + 16);
+      ghost = { trackId, start, length: Math.min(length, stepCount - start) };
+      setPainting(ghost);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      setPainting(null);
+      if (!ghost) {
+        setSelectedClipId(null);
+        return;
+      }
+      const existing = clipsByTrack[ghost.trackId] || [];
+      const clip: InstrumentClip = {
+        id: uid('clip'), trackId: ghost.trackId, name: `Pattern ${existing.length + 1}`,
+        start: ghost.start, length: ghost.length, notes: []
+      };
+      setClips(previous => [...previous, clip]);
+      setSelectedClipId(clip.id);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  };
+
+  const onLaneDoubleClick = (trackId: string, e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('.instrument-clip, .lane-add')) return;
+    const laneEl = e.currentTarget as HTMLElement;
+    const atStep = stepFromClientX(laneEl, e.clientX);
+    const start = Math.min(Math.floor(atStep / 16) * 16, Math.max(0, stepCount - 16));
+    const existing = clipsByTrack[trackId] || [];
+    const clip: InstrumentClip = {
+      id: uid('clip'), trackId, name: `Pattern ${existing.length + 1}`,
+      start, length: Math.min(16, stepCount - start), notes: []
+    };
+    setClips(previous => [...previous, clip]);
+    setSelectedClipId(clip.id);
+  };
+
+  // Drag a block along the timeline — or onto another lane to move it to
+  // that instrument. Snaps to beats (4 steps).
+  const onClipPointerDown = (e: React.PointerEvent, clip: InstrumentClip) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const laneEl = (e.currentTarget as HTMLElement).closest('.lane-content') as HTMLElement | null;
+    if (!laneEl) return;
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const origStart = clip.start;
+    const origTrack = clip.trackId;
+    const len = clip.length;
+    const id = clip.id;
+    setDraggingId(id);
+    const move = (ev: PointerEvent) => {
+      const rect = laneEl.getBoundingClientRect();
+      const dSteps = Math.round(((ev.clientX - sx) / Math.max(1, rect.width)) * stepCount / 4) * 4;
+      const newStart = Math.max(0, Math.min(stepCount - len, origStart + dSteps));
+      let newTrack = origTrack;
+      const under = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-ctx-track]');
+      const tid = under?.getAttribute('data-ctx-track');
+      if (tid) newTrack = tid;
+      setClips(previous => previous.map(c => (c.id === id ? { ...c, start: newStart, trackId: newTrack } : c)));
+    };
+    // preventDefault above eats the click, so a tap without dragging
+    // selects here manually. Cancel never selects.
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) setSelectedClipId(id);
+      setDraggingId(null);
+    };
+    const cancel = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      setDraggingId(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  };
+
   return (
     <section className="arrangement-workspace">
       <div className="arrangement-heading">
-        <div><strong>Song Timeline</strong><span>{bars} bars · {stepCount} steps · {clips.length} blocks · click a clip to edit its notes</span></div>
+        <div><strong>Song Timeline</strong><span>{bars} bars · {stepCount} steps · {clips.length} blocks · drag empty lane to paint a block · drag blocks to move</span></div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <span className="arrangement-hint">Endless blocks — full songs welcome</span>
           {onExtend && (
@@ -161,7 +287,16 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
         <div className="arrangement-canvas" style={{ width: timelineWidth }}>
           <div className="arrangement-ruler" style={{ gridTemplateColumns: `180px repeat(${bars}, 1fr)` }}>
             <div className="lane-label">INSTRUMENT</div>
-            {Array.from({ length: bars }, (_, index) => <div key={index}>BAR {index + 1}</div>)}
+            {Array.from({ length: bars }, (_, index) => (
+              <div
+                key={index}
+                onClick={() => onSeekStep?.(index * 16)}
+                title={onSeekStep ? `Play from bar ${index + 1}` : undefined}
+                style={onSeekStep ? { cursor: 'pointer' } : undefined}
+              >
+                BAR {index + 1}
+              </div>
+            ))}
           </div>
           <div className="arrangement-playhead" data-arrangement-playhead />
           {tracks.map(track => (
@@ -170,21 +305,42 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, on
                 <span>{track.name}</span>
                 <button onClick={() => addClip(track.id)} title={`Add ${track.name} clip`}><Plus size={14} /></button>
               </div>
-              <div className="lane-content" style={{ backgroundSize: `${100 / bars}% 100%` }}>
+              <div
+                className="lane-content"
+                style={{ backgroundSize: `${100 / bars}% 100%` }}
+                onPointerDown={e => onLanePointerDown(track.id, e)}
+                onDoubleClick={e => onLaneDoubleClick(track.id, e)}
+                title="Drag across empty space to paint a block · double-click for a quick 1-bar block · drag blocks to move them"
+              >
                 {(clipsByTrack[track.id] || []).map(clip => (
                   <button
                     key={clip.id}
                     data-ctx-track={track.id}
                     data-ctx-clip={clip.id}
                     className={`instrument-clip ${selectedClipId === clip.id ? 'selected' : ''}`}
-                    style={{ left: `${clip.start / stepCount * 100}%`, width: `${clip.length / stepCount * 100}%`, background: track.color }}
+                    style={{
+                      left: `${clip.start / stepCount * 100}%`, width: `${clip.length / stepCount * 100}%`, background: track.color,
+                      touchAction: 'none', cursor: draggingId === clip.id ? 'grabbing' : 'grab',
+                      ...(draggingId === clip.id ? { pointerEvents: 'none' as const, opacity: 0.75 } : {})
+                    }}
                     onClick={() => setSelectedClipId(clip.id)}
-                    title={`${clip.name}: ${clip.notes.length} notes${clip.gmId !== undefined ? ` · ${GM_INSTRUMENTS[clip.gmId]?.name ?? ''}` : ''}`}
+                    onPointerDown={e => onClipPointerDown(e, clip)}
+                    title={`${clip.name}: ${clip.notes.length} notes${clip.gmId !== undefined ? ` · ${GM_INSTRUMENTS[clip.gmId]?.name ?? ''}` : ''} · drag to move · Del removes`}
                   >
                     <strong>{clip.name}</strong><small>{clip.notes.length} notes{clip.gmId !== undefined ? ' · ✦' : ''}</small>
                   </button>
                 ))}
                 <button className="lane-add" onClick={() => addClip(track.id)}><Plus size={14} /> Add block</button>
+                {painting && painting.trackId === track.id && (
+                  <div
+                    style={{
+                      position: 'absolute', top: 7, bottom: 7,
+                      left: `${painting.start / stepCount * 100}%`, width: `${painting.length / stepCount * 100}%`,
+                      border: '1px dashed #00e5ff', borderRadius: 5, background: '#00e5ff22',
+                      pointerEvents: 'none', minWidth: 20
+                    }}
+                  />
+                )}
               </div>
             </div>
           ))}
