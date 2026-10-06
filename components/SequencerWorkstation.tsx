@@ -10,6 +10,7 @@ import {
 } from './SoundFontEngine';
 import ArrangementView, { type InstrumentClip } from './ArrangementView';
 import ContextMenu, { type CtxItem } from './ContextMenu';
+import TourGuide, { type TourStep } from './TourGuide';
 import { SHOWCASE_SONG } from './ShowcaseSong';
 
 const SHOWCASE_TRACKS = SHOWCASE_SONG.tracks as unknown as TrackDef[];
@@ -593,6 +594,7 @@ export default function SequencerWorkstation() {
   ));
   const [tapHint, setTapHint] = useState<boolean>(true);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null } | null>(null);
+  const [tourStep, setTourStep] = useState<number | null>(null);
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -2007,6 +2009,7 @@ export default function SequencerWorkstation() {
   const buildGlobalMenu = (): CtxItem[] => ([
     { label: 'Song tools', header: true },
     { label: isPlaying ? 'Stop' : 'Play', hint: isPlaying ? '■' : '▶', onClick: () => togglePlayback() },
+    { label: 'Take the guided tour', hint: '✨', onClick: () => setTourStep(0) },
     { separator: true, label: '' },
     {
       label: 'Play everything: unmute + unsolo', hint: 'full mix',
@@ -2026,6 +2029,62 @@ export default function SequencerWorkstation() {
     { separator: true, label: '' },
     { label: 'Clear pattern', danger: true, onClick: () => clearGrid() },
   ]);
+
+  // ── Guided tour ────────────────────────────────────────────────────────────
+  const TOUR_STEPS: TourStep[] = [
+    {
+      title: 'Welcome to SNUZY',
+      body: <>Your song is already loaded — tap anywhere and it starts playing. This tour walks you through everything in about a minute. Use ← → keys, Esc to leave anytime.</>,
+      view: 'arrangement',
+    },
+    {
+      title: 'Transport: play, pause, stop',
+      body: <>Green plays, yellow pauses <b>where you stopped</b>, red rewinds to the start. Click any bar or step number in a ruler to jump the playhead there.</>,
+      target: () => document.querySelector<HTMLElement>('.btn-playback'),
+      view: 'arrangement',
+    },
+    {
+      title: 'The song is blocks',
+      body: <>Every block is an instrument pattern. <b>Drag</b> a block to move it (even onto another instrument), <b>drag empty space</b> to paint a new one, <b>double-click</b> for a quick bar, <b>Del</b> removes the selected block.</>,
+      target: () => document.querySelector<HTMLElement>('.arrangement-scroll'),
+      view: 'arrangement',
+    },
+    {
+      title: 'Each block has its own sound',
+      body: <>Click a block to open its piano roll: draw notes, drag the <b>Vel</b> slider per note, and pick a <b>Block sound</b> so one block can be a trumpet while its lane stays piano. ✦ marks custom blocks.</>,
+      target: () => document.querySelector<HTMLElement>('.piano-roll-toolbar'),
+      view: 'arrangement',
+    },
+    {
+      title: 'Two editors, one song',
+      body: <>Arrangement is the full song. Step Sequencer is the drum-machine grid. Let's look at the grid — same song, different lens.</>,
+      target: () => document.querySelector<HTMLElement>('.view-switcher'),
+      view: 'steps',
+    },
+    {
+      title: 'Pads + mini mixer',
+      body: <>Click pads to toggle steps. Each row has its instrument, note, velocity — plus <b>VOL / PAN</b> sliders for a real per-track mix, and M / S / Hold buttons.</>,
+      target: () => document.querySelector<HTMLElement>('.sequencer-scroll'),
+      view: 'steps',
+    },
+    {
+      title: 'Right-click does everything',
+      body: <>Right-click any track, block, or empty space for the full toolbox: instruments, notes, mixer, mute/solo, and <b>one-click whole-song instrument swaps</b>. Clicking the page background resets mutes and solos.</>,
+      view: 'steps',
+    },
+    {
+      title: 'Save, share, undo',
+      body: <>↑ Load MIDI or a saved project · ↓ Save Project keeps everything · ↓ Export MIDI shares the song · <b>Ctrl+Z / Ctrl+Y</b> undo and redo almost anything. That's the tour — press Finish and make some noise.</>,
+      view: 'steps',
+    },
+  ];
+
+  useEffect(() => {
+    if (tourStep === null) return;
+    const v = TOUR_STEPS[tourStep]?.view;
+    if (v) setActiveView(v);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tourStep]);
 
   const gridTemplate = `268px 56px repeat(${stepCount}, minmax(18px, 1fr))`;
 
@@ -2319,6 +2378,14 @@ export default function SequencerWorkstation() {
             style={{ padding: '7px 16px', backgroundColor: '#00b0ff', color: '#000', fontWeight: 700, border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
           >
             ↓ Export MIDI
+          </button>
+          <button
+            onClick={() => setTourStep(0)}
+            className="btn-toolbar"
+            title="Take the interactive guided tour"
+            style={{ padding: '7px 16px', backgroundColor: '#651fff', color: '#fff', fontWeight: 700, border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+          >
+            ✨ Tour
           </button>
         </div>
       </div>
@@ -2730,6 +2797,16 @@ export default function SequencerWorkstation() {
           y={ctxMenu.y}
           items={ctxTrack ? [...buildBlockMenu(), ...buildTrackMenu(ctxTrack)] : buildGlobalMenu()}
           onClose={() => setCtxMenu(null)}
+        />
+      )}
+
+      {tourStep !== null && TOUR_STEPS[tourStep] && (
+        <TourGuide
+          step={tourStep}
+          steps={TOUR_STEPS}
+          onNext={() => setTourStep(s => (s === null || s + 1 >= TOUR_STEPS.length ? null : s + 1))}
+          onBack={() => setTourStep(s => (s === null || s === 0 ? s : s - 1))}
+          onClose={() => setTourStep(null)}
         />
       )}
     </div>
