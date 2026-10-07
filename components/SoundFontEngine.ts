@@ -250,6 +250,10 @@ export interface InstrumentStatus {
 export class SoundFontPlayer {
   private samplers: Map<number, Tone.Sampler> = new Map();
   private sampleMaps: Map<number, Record<string, string>> = new Map();
+  // Decoded audio shared by every per-track sampler: decoding once instead
+  // of once per track saves hundreds of MB (the difference between working
+  // and crashing on phones).
+  private sharedBuffers: Map<number, Tone.ToneAudioBuffers> = new Map();
   private loadingStates: Map<number, LoadingState> = new Map();
   private loadingErrors: Map<number, string> = new Map();
   private loadPromises: Map<number, Promise<void>> = new Map();
@@ -368,6 +372,8 @@ export class SoundFontPlayer {
                 return;
               }
               this.samplers.set(instrumentId, sampler);
+              const decoded = (sampler as unknown as { _buffers?: Tone.ToneAudioBuffers })._buffers;
+              if (decoded) this.sharedBuffers.set(instrumentId, decoded);
               this.setState(instrumentId, 'loaded');
               resolve();
             },
@@ -391,44 +397,36 @@ export class SoundFontPlayer {
 
   /**
    * Create a dedicated sampler for one mixer track, routed to that track's
-   * own channel strip (volume/pan). Shares the already-fetched sample map,
-   * so no extra network traffic — samples decode from memory.
+   * own channel strip (volume/pan). Points at the shared decoded buffers,
+   * so tracks cost a tiny wrapper each instead of a full re-decode.
    * Resolves to null if the instrument hasn't been fetched yet.
+   *
+   * NOTE: never dispose() these samplers — that would kill the shared
+   * buffers for every track. disconnect() them instead.
    */
   async createTrackSampler(
     instrumentId: number,
     destination: Tone.ToneAudioNode
   ): Promise<Tone.Sampler | null> {
     if (this.disposed) return null;
-    let samples = this.sampleMaps.get(instrumentId);
-    if (!samples) {
+    if (!this.isLoaded(instrumentId)) {
       try {
         await this.loadInstrument(instrumentId);
       } catch {
         return null;
       }
       if (this.disposed) return null;
-      samples = this.sampleMaps.get(instrumentId);
-      if (!samples) return null;
     }
-    return new Promise<Tone.Sampler | null>((resolve) => {
-      try {
-        const sampler = new Tone.Sampler({
-          urls: samples,
-          onload: () => {
-            if (this.disposed) {
-              sampler.dispose();
-              resolve(null);
-              return;
-            }
-            resolve(sampler);
-          },
-          onerror: () => resolve(null),
-        }).connect(destination);
-      } catch {
-        resolve(null);
-      }
-    });
+    const buffers = this.sharedBuffers.get(instrumentId);
+    if (!buffers) return null;
+    try {
+      const sampler = new Tone.Sampler({ urls: {} });
+      (sampler as unknown as { _buffers: Tone.ToneAudioBuffers })._buffers = buffers;
+      sampler.connect(destination);
+      return sampler;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -520,6 +518,7 @@ export class SoundFontPlayer {
     });
     this.samplers.clear();
     this.sampleMaps.clear();
+    this.sharedBuffers.clear();
     this.loadingStates.clear();
     this.loadingErrors.clear();
     this.loadPromises.clear();

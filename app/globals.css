@@ -285,7 +285,7 @@ button:active {
 .lane-label { position: sticky; left: 0; z-index: 6; display: flex; align-items: center; justify-content: space-between; gap: 5px; min-width: 0; padding: 8px 9px; border-left: 4px solid transparent; border-right: 1px solid #364055; background: #1a2030; color: #dbe2e9; font-size: 11px; font-weight: 700; }
 .lane-label span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .lane-label button { display: grid; place-items: center; flex: 0 0 auto; width: 25px; height: 25px; padding: 0; border: 1px solid #3b475d; border-radius: 4px; background: #252e40; color: #00d9ef; cursor: pointer; }
-.lane-content { position: relative; overflow: hidden; background: repeating-linear-gradient(to right, #151a26 0, #151a26 calc(6.25% - 1px), #31394b 6.25%); }
+.lane-content { position: relative; overflow: hidden; background: repeating-linear-gradient(to right, #151a26 0, #151a26 calc(6.25% - 1px), #31394b 6.25%); touch-action: pan-y; }
 .instrument-clip { position: absolute; top: 7px; bottom: 7px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; overflow: hidden; min-width: 20px; padding: 4px 7px; border: 1px solid #ffffff45; border-radius: 5px; color: #081015; cursor: pointer; text-align: left; opacity: .88; }
 .instrument-clip:hover, .instrument-clip.selected { filter: brightness(1.15); opacity: 1; transform: none; }
 .instrument-clip.selected { outline: 2px solid #fff; outline-offset: 1px; }

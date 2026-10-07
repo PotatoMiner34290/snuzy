@@ -968,7 +968,9 @@ export default function SequencerWorkstation() {
       holdMs = Math.max(80, Math.min(2500, Tone.Time(duration).toSeconds() * 1000 + 150));
     } catch {}
     window.setTimeout(() => {
-      samplerVoicesRef.current.set(sampler, Math.max(0, (samplerVoicesRef.current.get(sampler) ?? 1) - 1));
+      const left = Math.max(0, (samplerVoicesRef.current.get(sampler) ?? 1) - 1);
+      if (left === 0) samplerVoicesRef.current.delete(sampler);
+      else samplerVoicesRef.current.set(sampler, left);
     }, holdMs);
     return true;
   };
@@ -1084,11 +1086,13 @@ export default function SequencerWorkstation() {
     }
   };
 
+  // Track samplers share decoded buffers with every other track, so they
+  // are only disconnected here — dispose() would nuke everyone's audio.
   const disposeTrackSampler = (trackId: string) => {
     const prefix = `${trackId}:`;
     Object.keys(trackSamplersRef.current).forEach(key => {
       if (key === trackId || key.startsWith(prefix)) {
-        try { trackSamplersRef.current[key].dispose(); } catch {}
+        try { trackSamplersRef.current[key].disconnect(); } catch {}
         delete trackSamplersRef.current[key];
       }
     });
