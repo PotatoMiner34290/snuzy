@@ -551,6 +551,305 @@ function InstrumentPicker({ cats, currentGm, onPick }: {
   );
 }
 
+const EMPTY_ROW_CONST: boolean[] = [];
+
+interface TrackRowProps {
+  track: TrackDef;
+  channelIndex: number;
+  row: boolean[];
+  winStart: number;
+  winEnd: number;
+  gridTemplate: string;
+  trackCount: number;
+  isSelected: boolean;
+  isHeld: boolean;
+  isMuted: boolean;
+  isSolo: boolean;
+  engine: TrackEngine;
+  activePreset: string | undefined;
+  currentGm: number;
+  status: string;
+  velocity: number;
+  volume: number;
+  pan: number;
+  canUseSynth: boolean;
+  groupedGm: Record<string, { id: number; name: string }[]>;
+  onToggleMute: (id: string) => void;
+  onToggleSolo: (id: string) => void;
+  onPreview: (t: TrackDef) => void;
+  onToggleSelect: (id: string) => void;
+  onEngine: (t: TrackDef, e: TrackEngine) => void;
+  onInstrument: (t: TrackDef, gm: number) => void;
+  onPreset: (id: string, v: string) => void;
+  onVelocity: (id: string, v: number) => void;
+  onVolume: (id: string, v: number) => void;
+  onPan: (id: string, v: number) => void;
+  onRemove: (id: string) => void;
+  onHold: (id: string) => void;
+  onPad: (id: string, step: number) => void;
+}
+
+function TrackRowComponent(props: TrackRowProps) {
+  const {
+    track, channelIndex, row, winStart, winEnd, gridTemplate, trackCount,
+    isSelected, isHeld, isMuted, isSolo, engine, activePreset, currentGm,
+    status, velocity, volume, pan, canUseSynth, groupedGm,
+    onToggleMute, onToggleSolo, onPreview, onToggleSelect, onEngine,
+    onInstrument, onPreset, onVelocity, onVolume, onPan, onRemove, onHold, onPad,
+  } = props;
+  const panLabel = pan > 0 ? `R${pan}` : pan < 0 ? `L${Math.abs(pan)}` : 'center';
+  return (
+    <div
+      data-ctx-track={track.id}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: gridTemplate,
+        gap: 6,
+        alignItems: 'center',
+        opacity: isSelected && !isMuted ? 1 : 0.38,
+        transition: 'opacity 0.2s'
+      }}
+    >
+      <div
+        className="sticky-track-controls"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '5px 6px',
+          backgroundColor: '#1b2030',
+          borderRadius: 6,
+          borderLeft: `4px solid ${track.color}`,
+          minWidth: 0
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0 }}>
+          <button
+            onClick={() => onToggleMute(track.id)}
+            title="Mute channel"
+            style={{
+              width: 22, height: 18, fontSize: 9, fontWeight: 800, borderRadius: 3, cursor: 'pointer',
+              border: 'none', background: isMuted ? '#ff5252' : '#2a3144', color: isMuted ? '#000' : '#90a4ae'
+            }}
+          >
+            M
+          </button>
+          <button
+            onClick={() => onToggleSolo(track.id)}
+            title="Solo channel"
+            style={{
+              width: 22, height: 18, fontSize: 9, fontWeight: 800, borderRadius: 3, cursor: 'pointer',
+              border: 'none', background: isSolo ? '#ffd600' : '#2a3144', color: isSolo ? '#000' : '#90a4ae'
+            }}
+          >
+            S
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, gap: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 9, color: '#78909c', fontWeight: 700, flexShrink: 0 }}>
+              CH {channelIndex + 1}
+            </span>
+            <button
+              onClick={() => onPreview(track)}
+              className="track-label-btn"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#f0f3f6',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                textAlign: 'left',
+                padding: 0,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                flex: 1
+              }}
+              title="Preview this channel"
+            >
+              {track.name}
+            </button>
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect(track.id)}
+              title="Arm channel"
+              style={{ accentColor: track.color, cursor: 'pointer', flexShrink: 0 }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+            <select
+              value={engine}
+              onChange={e => onEngine(track, e.target.value as TrackEngine)}
+              style={{ ...selectStyle, color: '#90caf9', width: 52, flexShrink: 0 }}
+              title="Tone synth or SoundFont sampler"
+            >
+              {canUseSynth && <option value="synth">Tone</option>}
+              <option value="soundfont">GM</option>
+            </select>
+
+            <select
+              value={currentGm}
+              onChange={e => onInstrument(track, Number(e.target.value))}
+              style={{ ...selectStyle, color: track.color, flex: 1 }}
+              title="General MIDI SoundFont (all 128 instruments)"
+            >
+              {Object.entries(groupedGm).map(([cat, insts]) => (
+                <optgroup key={cat} label={cat}>
+                  {insts.map(inst => (
+                    <option key={inst.id} value={inst.id}>{inst.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+
+            <select
+              value={activePreset}
+              onChange={e => onPreset(track.id, e.target.value)}
+              style={{ ...selectStyle, color: '#b0bec5', width: 58, flexShrink: 0 }}
+              title="Note / pitch"
+            >
+              {(engine === 'soundfont' ? MIDI_NOTE_PRESETS : track.presets).map(p => (
+                <option key={p.id} value={p.id}>{p.note || p.name}</option>
+              ))}
+            </select>
+
+            <select
+              value={velocity}
+              onChange={e => onVelocity(track.id, Number(e.target.value))}
+              style={{ ...selectStyle, color: '#80cbc4', width: 52, flexShrink: 0 }}
+              title="MIDI velocity"
+            >
+              {[127, 110, 100, 85, 70, 55, 40, 25].map(v => (
+                <option key={v} value={v}>V{v}</option>
+              ))}
+            </select>
+
+            {engine === 'soundfont' && (
+              <span
+                title={status === 'loading' ? 'Loading SoundFont samples…' : status === 'error' ? 'Load failed' : 'Sampler ready'}
+                style={{ fontSize: 8, fontWeight: 700, color: status === 'loading' ? '#ffd600' : status === 'error' ? '#ff5252' : '#00e676', flexShrink: 0 }}
+              >
+                {status === 'loading' ? '…' : status === 'error' ? '!' : 'HD'}
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} title="Mixer: volume and stereo pan">
+            <span style={{ fontSize: 8, fontWeight: 800, color: '#78909c', flexShrink: 0 }}>VOL</span>
+            <input
+              type="range" min={0} max={100} value={volume}
+              onChange={e => onVolume(track.id, Number(e.target.value))}
+              style={{ width: 56, accentColor: track.color, cursor: 'pointer' }}
+              title={`Volume ${volume}%`}
+            />
+            <span style={{ fontSize: 8, fontWeight: 800, color: '#78909c', flexShrink: 0 }}>PAN</span>
+            <input
+              type="range" min={-50} max={50} value={pan}
+              onChange={e => onPan(track.id, Number(e.target.value))}
+              style={{ width: 56, accentColor: '#00e5ff', cursor: 'pointer' }}
+              title={`Pan ${panLabel}`}
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={() => onRemove(track.id)}
+          disabled={trackCount <= 1}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: trackCount <= 1 ? '#37474f' : '#546e7a',
+            cursor: trackCount <= 1 ? 'not-allowed' : 'pointer',
+            fontSize: 16,
+            padding: '0 2px',
+            flexShrink: 0
+          }}
+          title="Remove this channel"
+          onMouseEnter={e => { if (trackCount > 1) e.currentTarget.style.color = '#ff5252'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = trackCount <= 1 ? '#37474f' : '#546e7a'; }}
+        >
+          ×
+        </button>
+      </div>
+
+      <button
+        className="btn-hold sticky-hold-control"
+        onClick={() => onHold(track.id)}
+        style={{
+          padding: '6px 0',
+          fontSize: 10,
+          fontWeight: 800,
+          borderRadius: 6,
+          border: isHeld ? `1px solid ${track.color}` : '1px solid #37474f',
+          backgroundColor: isHeld ? track.color : '#1c2130',
+          color: isHeld ? '#000' : '#b0bec5',
+          cursor: 'pointer',
+          textTransform: 'uppercase'
+        }}
+        title="Hold note on every step"
+      >
+        {isHeld ? 'HELD' : 'HOLD'}
+      </button>
+
+      {row.slice(winStart, winEnd).map((active, k) => {
+        const stepIdx = winStart + k;
+        const isGroupFour = stepIdx % 4 === 0;
+        let padBackground = '#202638';
+        if (active) padBackground = track.color;
+        else if (isHeld) padBackground = `${track.color}44`;
+
+        return (
+          <div
+            key={stepIdx}
+            onClick={() => onPad(track.id, stepIdx)}
+            className={`pad-cell step-col-${stepIdx}`}
+            data-sequencer-step={stepIdx}
+            data-track-id={track.id}
+            style={{
+              backgroundColor: padBackground,
+              border: isGroupFour ? '1px solid #455a64' : '1px solid #283145',
+              boxShadow: active ? `0 0 6px ${track.color}88` : 'none'
+            }}
+            title={`Step ${stepIdx + 1}`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// Callback props are intentionally ignored: every row action closes over
+// refs and stable setters only, so data props alone decide re-renders.
+function trackRowEqual(a: TrackRowProps, b: TrackRowProps) {
+  return a.track === b.track
+    && a.channelIndex === b.channelIndex
+    && a.row === b.row
+    && a.winStart === b.winStart
+    && a.winEnd === b.winEnd
+    && a.gridTemplate === b.gridTemplate
+    && a.trackCount === b.trackCount
+    && a.isSelected === b.isSelected
+    && a.isHeld === b.isHeld
+    && a.isMuted === b.isMuted
+    && a.isSolo === b.isSolo
+    && a.engine === b.engine
+    && a.activePreset === b.activePreset
+    && a.currentGm === b.currentGm
+    && a.status === b.status
+    && a.velocity === b.velocity
+    && a.volume === b.volume
+    && a.pan === b.pan
+    && a.canUseSynth === b.canUseSynth
+    && a.groupedGm === b.groupedGm;
+}
+
+const TrackRow = React.memo(TrackRowComponent, trackRowEqual);
+
 const selectStyle: React.CSSProperties = {
   background: '#131722',
   border: '1px solid #2e384d',
@@ -606,6 +905,7 @@ export default function SequencerWorkstation() {
   // Unified song model: arrangement clips are the single source of truth and
   // the step grid is a live simplified projection of them — a pad lights up
   // wherever a note starts on that step. Editing pads writes through to clips.
+  const prevGridRef = useRef<Record<string, boolean[]>>({});
   const grid: Record<string, boolean[]> = React.useMemo(() => {
     const projected: Record<string, boolean[]> = {};
     tracks.forEach(t => { projected[t.id] = emptyRow(stepCount); });
@@ -617,6 +917,16 @@ export default function SequencerWorkstation() {
         if (s >= 0 && s < stepCount) row[s] = true;
       });
     });
+    // Reuse previous row arrays when identical so memoized rows skip render.
+    const prev = prevGridRef.current;
+    Object.keys(projected).forEach(id => {
+      const old = prev[id];
+      const cur = projected[id];
+      if (old && old.length === cur.length && old.every((v, i) => v === cur[i])) {
+        projected[id] = old;
+      }
+    });
+    prevGridRef.current = projected;
     return projected;
   }, [tracks, arrangementClips, stepCount]);
 
@@ -663,6 +973,49 @@ export default function SequencerWorkstation() {
   const stepCountRef = useRef(stepCount);
   const stepColCacheRef = useRef<Array<{ step: HTMLElement[] }>>([]);
   const gridScrollRef = useRef<HTMLDivElement | null>(null);
+  // Grid windowing: only the visible step columns (+overscan) render, so a
+  // 1664-step song mounts ~1-2k pads instead of ~15k. Buckets keep scroll
+  // updates infrequent.
+  const WIN_BUCKET = 32;
+  const WIN_OVERSCAN = 192;
+  const [win, setWin] = useState({ start: 0, end: 256 });
+  const winRafRef = useRef<number>(0);
+
+  const updateWinFromScroll = () => {
+    const sc = gridScrollRef.current;
+    if (!sc) return;
+    const steps = stepCountRef.current;
+    const stepW = Math.max(8, (sc.scrollWidth - 360) / Math.max(1, steps));
+    const first = Math.max(0, Math.floor((sc.scrollLeft - 360) / stepW) - WIN_OVERSCAN);
+    const count = Math.ceil(sc.clientWidth / stepW) + WIN_OVERSCAN * 2;
+    const start = Math.max(0, Math.min(steps, Math.floor(first / WIN_BUCKET) * WIN_BUCKET));
+    const end = Math.max(Math.min(steps, start + 32), Math.min(steps, start + Math.ceil(count / WIN_BUCKET) * WIN_BUCKET));
+    setWin(prev => (prev.start === start && prev.end === end ? prev : { start, end }));
+  };
+
+  const onGridScroll = () => {
+    if (winRafRef.current) return;
+    winRafRef.current = requestAnimationFrame(() => {
+      winRafRef.current = 0;
+      updateWinFromScroll();
+    });
+  };
+
+  useEffect(() => {
+    updateWinFromScroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepCount]);
+
+  // Fresh cells render on every window change — rebuild the highlight cache
+  // and repaint the live step so the playhead never goes dark mid-scroll.
+  useEffect(() => {
+    refreshStepColCache();
+    if (isPlayingRef.current) {
+      const s = stepRef.current;
+      stepColCacheRef.current[s]?.step.forEach(el => el.classList.add('step-current'));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [win]);
   const autoFollowRef = useRef(autoFollow);
   const arrangementClipsRef = useRef(arrangementClips);
   const activeViewRef = useRef(activeView);
@@ -1061,8 +1414,12 @@ export default function SequencerWorkstation() {
       el.classList.remove('step-current');
       el.classList.remove('note-playing');
     });
-    refreshStepColCache();
-    stepColCacheRef.current[s]?.step.forEach(el => el.classList.add('step-current'));
+    // Make sure the window covers the target, then highlight after render.
+    setWin(prev => {
+      if (s >= prev.start && s < prev.end) return prev;
+      const start = Math.max(0, Math.min(steps - 32, Math.floor((s - 96) / WIN_BUCKET) * WIN_BUCKET));
+      return { start, end: Math.min(steps, start + 320) };
+    });
     const playhead = document.querySelector<HTMLElement>('[data-arrangement-playhead]');
     const canvas = playhead?.parentElement;
     if (playhead && canvas) {
@@ -1075,6 +1432,10 @@ export default function SequencerWorkstation() {
       const cellRect = target.getBoundingClientRect();
       scroller.scrollTo({ left: Math.max(0, scroller.scrollLeft + cellRect.left - scrollerRect.left - scroller.clientWidth / 2), behavior: 'auto' });
     }
+    requestAnimationFrame(() => {
+      refreshStepColCache();
+      stepColCacheRef.current[s]?.step.forEach(el => el.classList.add('step-current'));
+    });
   };
 
   const togglePlayback = async () => {
@@ -1265,7 +1626,7 @@ export default function SequencerWorkstation() {
     pushHistory();
     setHoldTones(prev => {
       const next = { ...prev, [trackId]: !prev[trackId] };
-      if (next[trackId] && !isPlaying) {
+      if (next[trackId] && !isPlayingRef.current) {
         const def = tracksRef.current.find(t => t.id === trackId);
         if (def) triggerInstrument(def);
       }
@@ -1328,7 +1689,7 @@ export default function SequencerWorkstation() {
   };
 
   const removeChannel = (trackId: string) => {
-    if (tracks.length <= 1) return;
+    if (tracksRef.current.length <= 1) return;
     pushHistory();
     setTracks(prev => prev.filter(t => t.id !== trackId));
     setSelectedTracks(prev => prev.filter(id => id !== trackId));
@@ -1366,7 +1727,7 @@ export default function SequencerWorkstation() {
     setTrackEngine(prev => ({ ...prev, [track.id]: engine }));
     if (engine === 'soundfont') {
       disposeTrackSynth(track.id);
-      const gmId = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
+      const gmId = trackGmInstrumentsRef.current[track.id] ?? defaultGmForTrack(track);
       setTrackGmInstruments(prev => ({ ...prev, [track.id]: gmId }));
       const note = getTrackActiveNote(track);
       const safeNote = note.endsWith('n') ? (track.note && !track.note.endsWith('n') ? track.note : 'C4') : note;
@@ -1886,9 +2247,11 @@ export default function SequencerWorkstation() {
     const importId = Date.now();
 
     instrumentTracks.forEach((t, i) => {
+      // Drum-channel tracks usually carry no program: give them Taiko Drum
+      // instead of a piano, or every kick would play as Acoustic Grand.
       const gmProg = typeof t.instrument?.number === 'number'
         ? Math.max(0, Math.min(127, t.instrument.number))
-        : 0;
+        : (t.channel === 9 ? 116 : 0);
       const gm = GM_INSTRUMENTS[gmProg];
       const trackName = (t.name || (gm as { name?: string })?.name || `MIDI Track ${i + 1}`).slice(0, 48);
       const channelIndex = nextTracks.length;
@@ -2172,7 +2535,7 @@ export default function SequencerWorkstation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourStep]);
 
-  const gridTemplate = `268px 56px repeat(${stepCount}, minmax(18px, 1fr))`;
+  const gridTemplate = `268px 56px repeat(${Math.max(0, win.end - win.start)}, minmax(18px, 1fr))`;
 
   const ctxTrack = ctxMenu?.trackId ? tracks.find(t => t.id === ctxMenu.trackId) ?? null : null;
   const ctxClip = ctxMenu?.clipId ? arrangementClips.find(c => c.id === ctxMenu.clipId) ?? null : null;
@@ -2514,242 +2877,48 @@ export default function SequencerWorkstation() {
         </div>
       </div>
 
-      <div ref={gridScrollRef} className="sequencer-scroll">
+      <div ref={gridScrollRef} className="sequencer-scroll" onScroll={onGridScroll}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 720 }}>
           {tracks.map((track, channelIndex) => {
-            const isSelected = selectedTracks.includes(track.id);
-            const isHeld = holdTones[track.id];
-            const isMuted = !!mutedTracks[track.id];
-            const isSolo = !!soloTracks[track.id];
             const engine = trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth');
-            const activePreset = trackPresets[track.id] || track.presets[0]?.id;
             const currentGm = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
-            const status = sfStatus[currentGm] || (soundFontPlayerRef.current?.isLoaded(currentGm) ? 'loaded' : 'idle');
-            const row = grid[track.id] || emptyRow(stepCount);
-            const canUseSynth = track.type !== 'soundfont';
-
             return (
-              <div
+              <TrackRow
                 key={track.id}
-                data-ctx-track={track.id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: gridTemplate,
-                  gap: 6,
-                  alignItems: 'center',
-                  opacity: isSelected && !isMuted ? 1 : 0.38,
-                  transition: 'opacity 0.2s'
-                }}
-              >
-                <div
-                  className="sticky-track-controls"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '5px 6px',
-                    backgroundColor: '#1b2030',
-                    borderRadius: 6,
-                    borderLeft: `4px solid ${track.color}`,
-                    minWidth: 0
-                  }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0 }}>
-                    <button
-                      onClick={() => { pushHistory(); setMutedTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })); }}
-                      title="Mute channel"
-                      style={{
-                        width: 22, height: 18, fontSize: 9, fontWeight: 800, borderRadius: 3, cursor: 'pointer',
-                        border: 'none', background: isMuted ? '#ff5252' : '#2a3144', color: isMuted ? '#000' : '#90a4ae'
-                      }}
-                    >
-                      M
-                    </button>
-                    <button
-                      onClick={() => { pushHistory(); setSoloTracks(prev => ({ ...prev, [track.id]: !prev[track.id] })); }}
-                      title="Solo channel"
-                      style={{
-                        width: 22, height: 18, fontSize: 9, fontWeight: 800, borderRadius: 3, cursor: 'pointer',
-                        border: 'none', background: isSolo ? '#ffd600' : '#2a3144', color: isSolo ? '#000' : '#90a4ae'
-                      }}
-                    >
-                      S
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, gap: 3 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 9, color: '#78909c', fontWeight: 700, flexShrink: 0 }}>
-                        CH {channelIndex + 1}
-                      </span>
-                      <button
-                        onClick={() => triggerInstrument(track)}
-                        className="track-label-btn"
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: '#f0f3f6',
-                          cursor: 'pointer',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          textAlign: 'left',
-                          padding: 0,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          flex: 1
-                        }}
-                        title="Preview this channel"
-                      >
-                        {track.name}
-                      </button>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleTrackSelect(track.id)}
-                        title="Arm channel"
-                        style={{ accentColor: track.color, cursor: 'pointer', flexShrink: 0 }}
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-                      <select
-                        value={engine}
-                        onChange={e => setChannelEngine(track, e.target.value as TrackEngine)}
-                        style={{ ...selectStyle, color: '#90caf9', width: 52, flexShrink: 0 }}
-                        title="Tone synth or SoundFont sampler"
-                      >
-                        {canUseSynth && <option value="synth">Tone</option>}
-                        <option value="soundfont">GM</option>
-                      </select>
-
-                      <select
-                        value={currentGm}
-                        onChange={e => setChannelInstrument(track, Number(e.target.value))}
-                        style={{ ...selectStyle, color: track.color, flex: 1 }}
-                        title="General MIDI SoundFont (all 128 instruments)"
-                      >
-                        {Object.entries(groupedGmInstruments).map(([cat, insts]) => (
-                          <optgroup key={cat} label={cat}>
-                            {insts.map(inst => (
-                              <option key={inst.id} value={inst.id}>{inst.name}</option>
-                            ))}
-                          </optgroup>
-                        ))}
-                      </select>
-
-                      <select
-                        value={activePreset}
-                        onChange={e => { pushHistory(); setTrackPresets(prev => ({ ...prev, [track.id]: e.target.value })); }}
-                        style={{ ...selectStyle, color: '#b0bec5', width: 58, flexShrink: 0 }}
-                        title="Note / pitch"
-                      >
-                        {(engine === 'soundfont' ? MIDI_NOTE_PRESETS : track.presets).map(p => (
-                          <option key={p.id} value={p.id}>{p.note || p.name}</option>
-                        ))}
-                      </select>
-
-                      <select
-                        value={trackVelocity[track.id] ?? 100}
-                        onChange={e => { pushHistory(); setTrackVelocity(prev => ({ ...prev, [track.id]: Number(e.target.value) })); }}
-                        style={{ ...selectStyle, color: '#80cbc4', width: 52, flexShrink: 0 }}
-                        title="MIDI velocity"
-                      >
-                        {[127, 110, 100, 85, 70, 55, 40, 25].map(v => (
-                          <option key={v} value={v}>V{v}</option>
-                        ))}
-                      </select>
-
-                      {engine === 'soundfont' && (
-                        <span
-                          title={status === 'loading' ? 'Loading SoundFont samples…' : status === 'error' ? 'Load failed' : 'Sampler ready'}
-                          style={{ fontSize: 8, fontWeight: 700, color: status === 'loading' ? '#ffd600' : status === 'error' ? '#ff5252' : '#00e676', flexShrink: 0 }}
-                        >
-                          {status === 'loading' ? '…' : status === 'error' ? '!' : 'HD'}
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} title="Mixer: volume and stereo pan">
-                      <span style={{ fontSize: 8, fontWeight: 800, color: '#78909c', flexShrink: 0 }}>VOL</span>
-                      <input
-                        type="range" min={0} max={100} value={trackVolume[track.id] ?? 100}
-                        onChange={e => setTrackVolumeLive(track.id, Number(e.target.value))}
-                        style={{ width: 56, accentColor: track.color, cursor: 'pointer' }}
-                        title={`Volume ${(trackVolume[track.id] ?? 100)}%`}
-                      />
-                      <span style={{ fontSize: 8, fontWeight: 800, color: '#78909c', flexShrink: 0 }}>PAN</span>
-                      <input
-                        type="range" min={-50} max={50} value={trackPan[track.id] ?? 0}
-                        onChange={e => setTrackPanLive(track.id, Number(e.target.value))}
-                        style={{ width: 56, accentColor: '#00e5ff', cursor: 'pointer' }}
-                        title={`Pan ${(trackPan[track.id] ?? 0) > 0 ? `R${trackPan[track.id]}` : (trackPan[track.id] ?? 0) < 0 ? `L${Math.abs(trackPan[track.id] ?? 0)}` : 'center'}`}
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => removeChannel(track.id)}
-                    disabled={tracks.length <= 1}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: tracks.length <= 1 ? '#37474f' : '#546e7a',
-                      cursor: tracks.length <= 1 ? 'not-allowed' : 'pointer',
-                      fontSize: 16,
-                      padding: '0 2px',
-                      flexShrink: 0
-                    }}
-                    title="Remove this channel"
-                    onMouseEnter={e => { if (tracks.length > 1) e.currentTarget.style.color = '#ff5252'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = tracks.length <= 1 ? '#37474f' : '#546e7a'; }}
-                  >
-                    ×
-                  </button>
-                </div>
-
-                <button
-                  className="btn-hold sticky-hold-control"
-                  onClick={() => toggleHold(track.id)}
-                  style={{
-                    padding: '6px 0',
-                    fontSize: 10,
-                    fontWeight: 800,
-                    borderRadius: 6,
-                    border: isHeld ? `1px solid ${track.color}` : '1px solid #37474f',
-                    backgroundColor: isHeld ? track.color : '#1c2130',
-                    color: isHeld ? '#000' : '#b0bec5',
-                    cursor: 'pointer',
-                    textTransform: 'uppercase'
-                  }}
-                  title="Hold note on every step"
-                >
-                  {isHeld ? 'HELD' : 'HOLD'}
-                </button>
-
-                {row.map((active, stepIdx) => {
-                  const isGroupFour = stepIdx % 4 === 0;
-                  let padBackground = '#202638';
-                  if (active) padBackground = track.color;
-                  else if (isHeld) padBackground = `${track.color}44`;
-
-                  return (
-                    <div
-                      key={stepIdx}
-                      onClick={() => togglePad(track.id, stepIdx)}
-                      className={`pad-cell step-col-${stepIdx}`}
-                      data-sequencer-step={stepIdx}
-                      data-track-id={track.id}
-                      style={{
-                        backgroundColor: padBackground,
-                        border: isGroupFour ? '1px solid #455a64' : '1px solid #283145',
-                        boxShadow: active ? `0 0 6px ${track.color}88` : 'none'
-                      }}
-                      title={`Step ${stepIdx + 1}`}
-                    />
-                  );
-                })}
-              </div>
+                track={track}
+                channelIndex={channelIndex}
+                row={grid[track.id] ?? EMPTY_ROW_CONST}
+                winStart={win.start}
+                winEnd={win.end}
+                gridTemplate={gridTemplate}
+                trackCount={tracks.length}
+                isSelected={selectedTracks.includes(track.id)}
+                isHeld={!!holdTones[track.id]}
+                isMuted={!!mutedTracks[track.id]}
+                isSolo={!!soloTracks[track.id]}
+                engine={engine}
+                activePreset={trackPresets[track.id] || track.presets[0]?.id}
+                currentGm={currentGm}
+                status={sfStatus[currentGm] || (soundFontPlayerRef.current?.isLoaded(currentGm) ? 'loaded' : 'idle')}
+                velocity={trackVelocity[track.id] ?? 100}
+                volume={trackVolume[track.id] ?? 100}
+                pan={trackPan[track.id] ?? 0}
+                canUseSynth={track.type !== 'soundfont'}
+                groupedGm={groupedGmInstruments}
+                onToggleMute={id => { pushHistory(); setMutedTracks(prev => ({ ...prev, [id]: !prev[id] })); }}
+                onToggleSolo={id => { pushHistory(); setSoloTracks(prev => ({ ...prev, [id]: !prev[id] })); }}
+                onPreview={triggerInstrument}
+                onToggleSelect={toggleTrackSelect}
+                onEngine={setChannelEngine}
+                onInstrument={setChannelInstrument}
+                onPreset={(id, v) => { pushHistory(); setTrackPresets(prev => ({ ...prev, [id]: v })); }}
+                onVelocity={(id, v) => { pushHistory(); setTrackVelocity(prev => ({ ...prev, [id]: v })); }}
+                onVolume={setTrackVolumeLive}
+                onPan={setTrackPanLive}
+                onRemove={removeChannel}
+                onHold={toggleHold}
+                onPad={togglePad}
+              />
             );
           })}
 
@@ -2764,18 +2933,21 @@ export default function SequencerWorkstation() {
           >
             <div className="sticky-track-controls ruler-label">CHANNEL</div>
             <div className="sticky-hold-control ruler-label">HOLD</div>
-            {Array.from({ length: stepCount }).map((_, i) => (
-              <div
-                key={i}
-                className={`step-num step-col-${i} ${i % STEPS_PER_BAR === 0 ? 'bar-start' : ''}`}
-                data-sequencer-step={i}
-                title={`Play from here — Bar ${Math.floor(i / STEPS_PER_BAR) + 1}, step ${(i % STEPS_PER_BAR) + 1}`}
-                onClick={() => seekToStep(i)}
-                style={{ cursor: 'pointer' }}
-              >
-                {i % STEPS_PER_BAR === 0 ? `B${Math.floor(i / STEPS_PER_BAR) + 1}` : i + 1}
-              </div>
-            ))}
+            {Array.from({ length: Math.max(0, win.end - win.start) }).map((_, k) => {
+              const i = win.start + k;
+              return (
+                <div
+                  key={i}
+                  className={`step-num step-col-${i} ${i % STEPS_PER_BAR === 0 ? 'bar-start' : ''}`}
+                  data-sequencer-step={i}
+                  title={`Play from here — Bar ${Math.floor(i / STEPS_PER_BAR) + 1}, step ${(i % STEPS_PER_BAR) + 1}`}
+                  onClick={() => seekToStep(i)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {i % STEPS_PER_BAR === 0 ? `B${Math.floor(i / STEPS_PER_BAR) + 1}` : i + 1}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

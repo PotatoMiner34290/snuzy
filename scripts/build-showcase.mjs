@@ -55,7 +55,7 @@ midi.tracks
   .filter((t) => t.notes.length > 0)
   .forEach((t, i) => {
     const gmProg = typeof t.instrument?.number === 'number'
-      ? Math.max(0, Math.min(127, t.instrument.number)) : 0;
+      ? Math.max(0, Math.min(127, t.instrument.number)) : (t.channel === 9 ? 116 : 0);
     const name = (t.name || gmName[gmProg] || `MIDI Track ${i + 1}`).slice(0, 48);
     const id = `sct${i}`;
 
