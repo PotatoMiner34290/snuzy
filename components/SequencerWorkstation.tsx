@@ -12,6 +12,7 @@ import ArrangementView, { type InstrumentClip } from './ArrangementView';
 import ContextMenu, { type CtxItem } from './ContextMenu';
 import TourGuide, { type TourStep } from './TourGuide';
 import SecretPiano from './SecretPiano';
+import Mp3ToMidi from './Mp3ToMidi';
 import { SHOWCASE_SONG } from './ShowcaseSong';
 
 const SHOWCASE_TRACKS = SHOWCASE_SONG.tracks as unknown as TrackDef[];
@@ -364,6 +365,9 @@ function volToGain(v: number): number {
 function panToPan(p: number): number {
   return Math.max(-1, Math.min(1, p / 50));
 }
+
+// Pitched Tone voices can be held by the damper pedal; drums just decay.
+const SUSTAIN_SYNTH_TYPES: SynthType[] = ['fm', 'synth', 'rim', 'acid', 'wobble', 'pluck', 'poly', 'am', 'space'];
 
 // One Tone synth instance per track (so every track owns its mixer strip).
 // Settings mirror the original shared-instrument setup.
@@ -886,6 +890,11 @@ export default function SequencerWorkstation() {
   const [trackVelocity, setTrackVelocity] = useState<Record<string, number>>(() => ({ ...(SHOWCASE_SONG.velocity as Record<string, number>) }));
 
   // Mixer: per-track volume (0-100, default 100) and pan (-50..50, default 0).
+  // Damper pedal regions per track (song steps), parsed from MIDI CC64.
+  const [trackSustain, setTrackSustain] = useState<Record<string, { down: number; up: number }[]>>({});
+  const trackSustainRef = useRef(trackSustain);
+  useEffect(() => { trackSustainRef.current = trackSustain; }, [trackSustain]);
+
   const [trackVolume, setTrackVolume] = useState<Record<string, number>>(() => (
     Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 100]))
   ));
@@ -893,9 +902,16 @@ export default function SequencerWorkstation() {
     Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 0]))
   ));
   const [tapHint, setTapHint] = useState<boolean>(true);
+  // Boot preloader: the app reveals itself only once the audio engine and
+  // every showcase sound are actually ready, so nothing stutters at startup.
+  const [boot, setBoot] = useState({ done: 0, total: 1, label: 'Starting audio engine…' });
+  const [bootVisible, setBootVisible] = useState(true);
+  const bootedRef = useRef(false);
+  const pendingAutoRef = useRef(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null } | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [secretPiano, setSecretPiano] = useState<boolean>(false);
+  const [mp3Booth, setMp3Booth] = useState<boolean>(false);
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -1143,6 +1159,41 @@ export default function SequencerWorkstation() {
     }
   };
 
+  // ── Damper pedal: held voices ────────────────────────────────────────────
+  const heldVoicesRef = useRef<Record<string, Array<{ sampler?: Tone.Sampler; inst?: any; note: string }>>>({});
+  const sustainPrevRef = useRef<Record<string, boolean>>({});
+
+  // Call once per track per step: releases voices on pedal-up, reports state.
+  const trackSustainTick = (trackId: string, step: number, time: number): boolean => {
+    const down = sustainDownAt(trackId, step);
+    if (sustainPrevRef.current[trackId] && !down) releaseTrackVoices(trackId, time);
+    sustainPrevRef.current[trackId] = down;
+    return down;
+  };
+
+  const sustainDownAt = (trackId: string, step: number): boolean => {
+    const regions = trackSustainRef.current[trackId];
+    if (!regions) return false;
+    return regions.some(r => step >= r.down && step < r.up);
+  };
+
+  const releaseTrackVoices = (trackId: string, time?: number) => {
+    const voices = heldVoicesRef.current[trackId];
+    if (!voices || voices.length === 0) return;
+    delete heldVoicesRef.current[trackId];
+    const t = time !== undefined ? time : Tone.now();
+    voices.forEach(v => {
+      try {
+        if (v.sampler) v.sampler.triggerRelease(v.note, t);
+        else if (v.inst) v.inst.triggerRelease(v.note, t);
+      } catch {}
+    });
+  };
+
+  const releaseAllVoices = (time?: number) => {
+    Object.keys(heldVoicesRef.current).forEach(id => releaseTrackVoices(id, time));
+  };
+
   const refreshStepColCache = () => {
     const cache = Array.from({ length: stepCountRef.current }, () => ({ step: [] as HTMLElement[] }));
     document.querySelectorAll<HTMLElement>('[data-sequencer-step]').forEach(element => {
@@ -1173,6 +1224,12 @@ export default function SequencerWorkstation() {
       // Editing keys (block delete, undo/redo, text fields) must never start playback.
       if (e instanceof KeyboardEvent && (e.key === 'Delete' || e.key === 'Backspace' || e.ctrlKey || e.metaKey)) return;
       if (e.type === 'keydown' && document.activeElement instanceof HTMLButtonElement) return;
+      // Taps during boot only register intent: music starts the moment the
+      // preloader finishes, never over half-loaded instruments.
+      if (!bootedRef.current) {
+        pendingAutoRef.current = true;
+        return;
+      }
       done = true;
       setTapHint(false);
       try {
@@ -1189,6 +1246,17 @@ export default function SequencerWorkstation() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A pre-boot tap becomes playback the instant the preloader finishes.
+  useEffect(() => {
+    if (bootVisible) return;
+    if (pendingAutoRef.current === false) return;
+    if (!bootedRef.current || isPlayingRef.current) return;
+    pendingAutoRef.current = false;
+    setTapHint(false);
+    togglePlayback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootVisible]);
 
   // Ctrl/Cmd+Z undo, Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) redo.
   // Skipped inside text fields so native text undo keeps working.
@@ -1247,27 +1315,54 @@ export default function SequencerWorkstation() {
     };
 
     // Warm the GM sample maps, then build one mixer strip + sound per track
-    // so volume/pan apply per track from the very first note.
-    const showcaseGm = SHOWCASE_SONG.tracks.map(t => t.defaultGmId ?? 0);
-    [...new Set([0, 24, 33, 48, 61, 81, 116, ...showcaseGm])].forEach(id => {
-      sfPlayer.loadInstrument(id).catch(() => {});
-    });
-    tracks.forEach(track => {
-      ensureTrackChain(track.id);
-      const engine = trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth');
-      if (engine === 'soundfont') {
-        const gmId = trackGmInstruments[track.id] ?? defaultGmForTrack(track);
-        ensureTrackSamplerById(track.id, gmId).catch(() => {});
-      } else {
-        ensureTrackSynth(track);
-      }
-    });
-    // Per-block instrument overrides get their samplers ready too.
-    arrangementClips.forEach(clip => {
-      if (clip.gmId !== undefined) ensureTrackSamplerById(clip.trackId, clip.gmId).catch(() => {});
-    });
+    // so volume/pan apply per track from the very first note. Every step
+    // reports to the boot preloader; the app reveals itself when done.
+    let cancelled = false;
+    const finishBoot = () => {
+      if (cancelled || bootedRef.current) return;
+      bootedRef.current = true;
+      setBoot(prev => ({ ...prev, done: prev.total, label: 'Ready' }));
+      window.setTimeout(() => setBootVisible(false), 450);
+    };
+    (async () => {
+      const showcaseGm = SHOWCASE_SONG.tracks.map(t => t.defaultGmId ?? 0);
+      const gmIds = [...new Set([0, 24, 33, 48, 61, 81, 116, ...showcaseGm])];
+      const sfJobs: { trackId: string; gmId: number }[] = [];
+      tracks.forEach(track => {
+        if ((trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth')) !== 'soundfont') return;
+        sfJobs.push({ trackId: track.id, gmId: trackGmInstruments[track.id] ?? defaultGmForTrack(track) });
+      });
+      arrangementClips.forEach(clip => {
+        if (clip.gmId !== undefined) sfJobs.push({ trackId: clip.trackId, gmId: clip.gmId });
+      });
+      const total = gmIds.length + sfJobs.length + tracks.length;
+      let done = 0;
+      const tick = (label: string) => {
+        if (cancelled) return;
+        done += 1;
+        setBoot({ done, total, label });
+      };
+      setBoot({ done: 0, total, label: 'Downloading instruments…' });
+      await Promise.all(gmIds.map(id =>
+        sfPlayer.loadInstrument(id).catch(() => {}).finally(() => tick(`Downloading instruments… ${Math.min(done + 1, gmIds.length)}/${gmIds.length}`))
+      ));
+      if (cancelled) return;
+      tracks.forEach(track => {
+        ensureTrackChain(track.id);
+        if ((trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth')) !== 'soundfont') {
+          ensureTrackSynth(track);
+        }
+        tick('Warming up tracks…');
+      });
+      await Promise.all(sfJobs.map(job =>
+        ensureTrackSamplerById(job.trackId, job.gmId).catch(() => {}).finally(() => tick('Warming up tracks…'))
+      ));
+      if (cancelled) return;
+      finishBoot();
+    })().catch(() => finishBoot());
 
     return () => {
+      cancelled = true;
       try {
         Tone.Transport.stop();
         Tone.Transport.cancel();
@@ -1301,17 +1396,33 @@ export default function SequencerWorkstation() {
   // Single trigger path for every track: per-track Tone synth or per-track
   // SoundFont sampler, both routed through the track's mixer strip.
   // gmOverride plays this hit with a per-block instrument instead.
-  const fireTrackSound = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number, duration: string | number = '8n', gmOverride?: number) => {
+  const fireTrackSound = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number, duration: string | number = '8n', gmOverride?: number, sustainDown = false) => {
     try {
       if (usesSoundFont(trackDef)) {
         const gmId = gmOverride ?? trackGmInstrumentsRef.current[trackDef.id] ?? defaultGmForTrack(trackDef);
         const sampler = trackSamplersRef.current[samplerKey(trackDef.id, gmId)];
         if (!sampler || !samplerHasRoom(sampler, duration)) return;
-        sampler.triggerAttackRelease(currentNote || 'C4', duration, triggerTime, velocity);
+        const note = currentNote || 'C4';
+        if (sustainDown) {
+          try {
+            sampler.triggerAttack(note, triggerTime, velocity);
+            (heldVoicesRef.current[trackDef.id] ||= []).push({ sampler, note });
+          } catch {}
+        } else {
+          sampler.triggerAttackRelease(note, duration, triggerTime, velocity);
+        }
         return;
       }
       const inst = ensureTrackSynth(trackDef);
       if (!inst) return;
+      if (sustainDown && SUSTAIN_SYNTH_TYPES.includes(trackDef.type)) {
+        const note = currentNote || 'C4';
+        try {
+          inst.triggerAttack(note, triggerTime, velocity);
+          (heldVoicesRef.current[trackDef.id] ||= []).push({ inst, note });
+        } catch {}
+        return;
+      }
       if (trackDef.type === 'membrane' || trackDef.type === 'sub808' || trackDef.type === 'tom') {
         inst.triggerAttackRelease(currentNote || 'C1', '8n', triggerTime, velocity);
       } else if (trackDef.type === 'noise') {
@@ -1367,6 +1478,7 @@ export default function SequencerWorkstation() {
   // Pause keeps the playhead position; full stop rewinds to the start.
   const pauseTransport = (reset: boolean) => {
     Tone.Transport.stop();
+    releaseAllVoices();
     if (repeatIdRef.current !== null) {
       Tone.Transport.clear(repeatIdRef.current);
       repeatIdRef.current = null;
@@ -1409,6 +1521,7 @@ export default function SequencerWorkstation() {
   const seekToStep = (step: number) => {
     const steps = stepCountRef.current;
     const s = Math.max(0, Math.min(steps - 1, Math.floor(step)));
+    releaseAllVoices();
     stepRef.current = s;
     document.querySelectorAll('.step-current, .note-playing').forEach(el => {
       el.classList.remove('step-current');
@@ -1463,6 +1576,7 @@ export default function SequencerWorkstation() {
 
           // Same real block notes the arrangement plays — identical sound in
           // both views. Held tracks with no note here drone the track pitch.
+          const sustainDown = trackSustainTick(track.id, step, time);
           let firedReal = false;
           arrangementClipsRef.current.forEach(clip => {
             if (clip.trackId !== track.id) return;
@@ -1470,7 +1584,7 @@ export default function SequencerWorkstation() {
             if (local < 0 || local >= clip.length) return;
             clip.notes.filter(note => note.start === local).forEach(note => {
               const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
-              fireTrackSound(track, midiNoteName(note.pitch), time, note.velocity / 127, duration, clip.gmId);
+              fireTrackSound(track, midiNoteName(note.pitch), time, note.velocity / 127, duration, clip.gmId, sustainDown);
               firedReal = true;
             });
           });
@@ -1487,11 +1601,12 @@ export default function SequencerWorkstation() {
             if (localStep < 0 || localStep >= clip.length || !channelAudible(clip.trackId)) return;
             const track = currentTracks.find(item => item.id === clip.trackId);
             if (!track) return;
+            const sustainDown = trackSustainTick(track.id, step, time);
             clip.notes.filter(note => note.start === localStep).forEach(note => {
               const noteName = midiNoteName(note.pitch);
               const velocity = note.velocity / 127;
               const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
-              fireTrackSound(track, noteName, time, velocity, duration, clip.gmId);
+              fireTrackSound(track, noteName, time, velocity, duration, clip.gmId, sustainDown);
             });
           });
         }
@@ -1719,11 +1834,18 @@ export default function SequencerWorkstation() {
       delete next[trackId];
       return next;
     });
+    setTrackSustain(prev => {
+      const next = { ...prev };
+      delete next[trackId];
+      return next;
+    });
+    releaseTrackVoices(trackId);
     disposeTrackChain(trackId);
   };
 
   const setChannelEngine = (track: TrackDef, engine: TrackEngine) => {
     pushHistory();
+    releaseTrackVoices(track.id);
     setTrackEngine(prev => ({ ...prev, [track.id]: engine }));
     if (engine === 'soundfont') {
       disposeTrackSynth(track.id);
@@ -1742,6 +1864,7 @@ export default function SequencerWorkstation() {
 
   const setChannelInstrument = async (track: TrackDef, gmId: number) => {
     pushHistory();
+    releaseTrackVoices(track.id);
     setTrackGmInstruments(prev => ({ ...prev, [track.id]: gmId }));
     setTrackEngine(prev => ({ ...prev, [track.id]: 'soundfont' }));
     const gm = GM_INSTRUMENTS[gmId];
@@ -1921,6 +2044,7 @@ export default function SequencerWorkstation() {
         trackVelocity,
         trackVolume,
         trackPan,
+        trackSustain,
         selectedTracks,
         holdTones,
         mutedTracks,
@@ -1967,6 +2091,7 @@ export default function SequencerWorkstation() {
     trackVelocity: Record<string, number>;
     trackVolume: Record<string, number>;
     trackPan: Record<string, number>;
+    trackSustain: Record<string, { down: number; up: number }[]>;
     selectedTracks: string[];
     holdTones: Record<string, boolean>;
     mutedTracks: Record<string, boolean>;
@@ -1991,6 +2116,7 @@ export default function SequencerWorkstation() {
     trackVelocity: trackVelocityRef.current,
     trackVolume: trackVolumeRef.current,
     trackPan: trackPanRef.current,
+    trackSustain: trackSustainRef.current,
     selectedTracks: selectedTracksRef.current,
     holdTones: holdTonesRef.current,
     mutedTracks: mutedTracksRef.current,
@@ -2054,6 +2180,8 @@ export default function SequencerWorkstation() {
     setTrackVelocity(snap.trackVelocity);
     setTrackVolume(snap.trackVolume);
     setTrackPan(snap.trackPan);
+    releaseAllVoices();
+    setTrackSustain(snap.trackSustain ?? {});
     setSelectedTracks(snap.selectedTracks);
     setHoldTones(snap.holdTones);
     setMutedTracks(snap.mutedTracks);
@@ -2192,6 +2320,9 @@ export default function SequencerWorkstation() {
     } else {
       setActiveView('steps');
     }
+    if (data.trackSustain) setTrackSustain(data.trackSustain);
+    releaseAllVoices();
+    sustainPrevRef.current = {};
     const programs = new Set<number>(Object.values((data.trackGmInstruments || {}) as Record<string, number>));
     programs.forEach(program => loadSoundFontInstrument(program));
     if (Array.isArray(data.tracks)) {
@@ -2243,6 +2374,7 @@ export default function SequencerWorkstation() {
     const nextVel: Record<string, number> = {};
     const nextSelected: string[] = [];
     const nextClips: InstrumentClip[] = [];
+    const nextSustain: Record<string, { down: number; up: number }[]> = {};
     const programsToLoad = new Set<number>();
     const importId = Date.now();
 
@@ -2301,6 +2433,23 @@ export default function SequencerWorkstation() {
       }).filter(q => q.globalStep < importedStepCount)
         .sort((a, b) => a.globalStep - b.globalStep || a.pitch - b.pitch);
 
+      // Damper pedal (CC64) → sustain regions in song steps.
+      const cc64 = ((t.controlChanges?.[64] || []) as { ticks: number; value: number }[])
+        .slice().sort((a, b) => a.ticks - b.ticks);
+      const regions: { down: number; up: number }[] = [];
+      let pedalDown: number | null = null;
+      cc64.forEach(ev => {
+        const atStep = Math.round(ev.ticks / ticksPer16th);
+        if (ev.value >= 0.5) {
+          if (pedalDown === null) pedalDown = Math.max(0, Math.min(importedStepCount - 1, atStep));
+        } else if (pedalDown !== null) {
+          regions.push({ down: pedalDown, up: Math.max(pedalDown + 1, Math.min(importedStepCount, atStep)) });
+          pedalDown = null;
+        }
+      });
+      if (pedalDown !== null) regions.push({ down: pedalDown, up: importedStepCount });
+      if (regions.length > 0) nextSustain[id] = regions;
+
       const numBlocks = Math.ceil(importedStepCount / ENDLESS_BLOCK_STEPS);
       for (let b = 0; b < numBlocks; b++) {
         const blockStart = b * ENDLESS_BLOCK_STEPS;
@@ -2351,6 +2500,9 @@ export default function SequencerWorkstation() {
     setHoldTones({});
     setMutedTracks({});
     setSoloTracks({});
+    releaseAllVoices();
+    sustainPrevRef.current = {};
+    setTrackSustain(nextSustain);
     programsToLoad.forEach(program => loadSoundFontInstrument(program));
     // Rebuild mixer strips for the fresh track list; drop orphaned ones.
     const freshIds = new Set(nextSelected);
@@ -3049,6 +3201,47 @@ export default function SequencerWorkstation() {
         </div>
       )}
 
+      {bootVisible && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 12000,
+            background: '#0b0e14',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 14,
+            opacity: boot.done >= boot.total ? 0 : 1,
+            transition: 'opacity 0.4s ease',
+            pointerEvents: boot.done >= boot.total ? 'none' : 'auto',
+          }}
+        >
+          <div style={{ fontSize: 34, fontWeight: 800, letterSpacing: 6, color: '#00e5ff', textShadow: '0 0 24px #00e5ff66' }}>
+            SNUZY
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, color: '#78909c' }}>
+            MIDI WORKSTATION
+          </div>
+          <div style={{ width: 280, height: 8, borderRadius: 999, background: '#1b2230', border: '1px solid #2c3547', overflow: 'hidden' }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${boot.total > 0 ? Math.round((boot.done / boot.total) * 100) : 0}%`,
+                borderRadius: 999,
+                background: 'linear-gradient(90deg, #00e5ff, #00e676)',
+                boxShadow: '0 0 12px #00e5ff88',
+                transition: 'width 0.2s ease',
+              }}
+            />
+          </div>
+          <div style={{ fontSize: 12, color: '#90a4ae' }}>
+            {boot.total > 0 ? Math.round((boot.done / boot.total) * 100) : 0}% · {boot.label}
+          </div>
+        </div>
+      )}
+
       {ctxMenu && (
         <ContextMenu
           x={ctxMenu.x}
@@ -3083,10 +3276,41 @@ export default function SequencerWorkstation() {
         </button>
       )}
 
+      {!mp3Booth && (
+        <button
+          onClick={() => setMp3Booth(true)}
+          title="MP3 → MIDI converter"
+          style={{
+            position: 'fixed', right: 12, bottom: 12, zIndex: 9997,
+            minWidth: 34, height: 34, borderRadius: 8, padding: '0 8px',
+            border: '1px solid #3b475d', background: '#171c29', color: '#00e5ff',
+            cursor: 'pointer', fontSize: 11, fontWeight: 800, lineHeight: 1,
+            display: 'flex', alignItems: 'center', gap: 4,
+          }}
+        >
+          <span style={{ fontSize: 14 }}>♫</span>MP3
+        </button>
+      )}
+
+      {mp3Booth && (
+        <Mp3ToMidi
+          bpm={bpm}
+          onImport={(midi, name) => {
+            setMp3Booth(false);
+            setActiveView('arrangement');
+            if (!applyMidiObject(midi, name)) {
+              alert('No melody detected in that file — try higher sensitivity or a simpler recording.');
+            }
+          }}
+          onExit={() => setMp3Booth(false)}
+        />
+      )}
+
       {secretPiano && (
         <SecretPiano
           tracks={tracks}
           clips={arrangementClips}
+          sustain={trackSustain}
           stepCount={stepCount}
           bpm={bpm}
           isPlaying={isPlaying}
