@@ -901,13 +901,12 @@ export default function SequencerWorkstation() {
   const [trackPan, setTrackPan] = useState<Record<string, number>>(() => (
     Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 0]))
   ));
-  const [tapHint, setTapHint] = useState<boolean>(true);
+
   // Boot preloader: the app reveals itself only once the audio engine and
   // every showcase sound are actually ready, so nothing stutters at startup.
   const [boot, setBoot] = useState({ done: 0, total: 1, label: 'Starting audio engine…' });
   const [bootVisible, setBootVisible] = useState(true);
   const bootedRef = useRef(false);
-  const pendingAutoRef = useRef(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null } | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [secretPiano, setSecretPiano] = useState<boolean>(false);
@@ -1216,51 +1215,6 @@ export default function SequencerWorkstation() {
   useEffect(() => { trackPanRef.current = trackPan; }, [trackPan]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
-
-  // Tap-anywhere autoplay: the first visitor gesture starts the showcase
-  // song (browsers only allow audio after user interaction).
-  useEffect(() => {
-    let done = false;
-    const autoStart = async (e: Event) => {
-      if (done) return;
-      const target = e.target as HTMLElement | null;
-      if (e.type === 'pointerdown' && target?.closest?.('.btn-playback')) return;
-      // Editing keys (block delete, undo/redo, text fields) must never start playback.
-      if (e instanceof KeyboardEvent && (e.key === 'Delete' || e.key === 'Backspace' || e.ctrlKey || e.metaKey)) return;
-      if (e.type === 'keydown' && document.activeElement instanceof HTMLButtonElement) return;
-      // Taps during boot only register intent: music starts the moment the
-      // preloader finishes, never over half-loaded instruments.
-      if (!bootedRef.current) {
-        pendingAutoRef.current = true;
-        return;
-      }
-      done = true;
-      setTapHint(false);
-      try {
-        if (isPlayingRef.current) return;
-        await Tone.start();
-        if (!isPlayingRef.current) await togglePlayback();
-      } catch {}
-    };
-    window.addEventListener('pointerdown', autoStart);
-    window.addEventListener('keydown', autoStart);
-    return () => {
-      window.removeEventListener('pointerdown', autoStart);
-      window.removeEventListener('keydown', autoStart);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // A pre-boot tap becomes playback the instant the preloader finishes.
-  useEffect(() => {
-    if (bootVisible) return;
-    if (pendingAutoRef.current === false) return;
-    if (!bootedRef.current || isPlayingRef.current) return;
-    pendingAutoRef.current = false;
-    setTapHint(false);
-    togglePlayback();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bootVisible]);
 
   // Ctrl/Cmd+Z undo, Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) redo.
   // Skipped inside text fields so native text undo keeps working.
@@ -1572,6 +1526,9 @@ export default function SequencerWorkstation() {
         const currentGrid = gridRef.current;
         const currentHolds = holdTonesRef.current;
         const currentTracks = tracksRef.current;
+        // Exact note lengths in seconds — coarse '8n'/'4n' buckets audibly
+        // cut sustained piano lines short, so durations stay in steps here.
+        const stepDurSec = 60 / bpmRef.current / 4;
 
         for (let i = 0; activeViewRef.current === 'steps' && i < currentTracks.length; i++) {
           const track = currentTracks[i];
@@ -1587,8 +1544,8 @@ export default function SequencerWorkstation() {
             const local = step - clip.start;
             if (local < 0 || local >= clip.length) return;
             clip.notes.filter(note => note.start === local).forEach(note => {
-              const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
-              fireTrackSound(track, midiNoteName(note.pitch), time, note.velocity / 127, duration, clip.gmId, sustainDown);
+              const durSec = Math.max(0.05, note.duration * stepDurSec);
+              fireTrackSound(track, midiNoteName(note.pitch), time, note.velocity / 127, durSec, clip.gmId, sustainDown);
               firedReal = true;
             });
           });
@@ -1609,8 +1566,8 @@ export default function SequencerWorkstation() {
             clip.notes.filter(note => note.start === localStep).forEach(note => {
               const noteName = midiNoteName(note.pitch);
               const velocity = note.velocity / 127;
-              const duration = note.duration >= 8 ? '2n' : note.duration >= 4 ? '4n' : note.duration >= 2 ? '8n' : '16n';
-              fireTrackSound(track, noteName, time, velocity, duration, clip.gmId, sustainDown);
+              const durSec = Math.max(0.05, note.duration * stepDurSec);
+              fireTrackSound(track, noteName, time, velocity, durSec, clip.gmId, sustainDown);
             });
           });
         }
@@ -2639,7 +2596,7 @@ export default function SequencerWorkstation() {
   const TOUR_STEPS: TourStep[] = [
     {
       title: 'Welcome to SNUZY',
-      body: <>Your song is already loaded — tap anywhere and it starts playing. This tour walks you through everything in about a minute. Use ← → keys, Esc to leave anytime.</>,
+      body: <>Your song is already loaded — press PLAY and it starts playing. This tour walks you through everything in about a minute. Use ← → keys, Esc to leave anytime.</>,
       view: 'arrangement',
     },
     {
@@ -3182,29 +3139,6 @@ export default function SequencerWorkstation() {
         </div>
       </div>
 
-      {tapHint && !isPlaying && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 32,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 9998,
-            pointerEvents: 'none',
-            background: '#00e676',
-            color: '#000',
-            fontWeight: 800,
-            fontSize: 13,
-            padding: '10px 22px',
-            borderRadius: 999,
-            boxShadow: '0 0 24px #00e67688',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          Tap anywhere to play
-        </div>
-      )}
-
       {bootVisible && (
         <div
           style={{
@@ -3321,6 +3255,7 @@ export default function SequencerWorkstation() {
           stepRef={stepRef}
           onTogglePlay={() => togglePlayback()}
           onExit={() => setSecretPiano(false)}
+          onSeekStep={seekToStep}
         />
       )}
     </div>
