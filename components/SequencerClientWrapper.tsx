@@ -1,5 +1,6 @@
 'use client';
 
+import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 
 const SequencerWorkstation = dynamic(
@@ -27,5 +28,13 @@ const SequencerWorkstation = dynamic(
 );
 
 export default function SequencerClientWrapper() {
+  // Cache CDN samples + piano-AI model for instant repeat visits.
+  // Production only: localhost stays uncached so dev never serves stale files.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!('serviceWorker' in navigator)) return;
+    if (window.location.protocol !== 'https:') return;
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }, []);
   return <SequencerWorkstation />;
 }

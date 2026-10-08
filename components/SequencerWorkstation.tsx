@@ -10,6 +10,7 @@ import {
 } from './SoundFontEngine';
 import ArrangementView, { type InstrumentClip } from './ArrangementView';
 import ContextMenu, { type CtxItem } from './ContextMenu';
+import { DRUM_KITS, DRUM_PIECE_FILE, DRUM_PIECE_NOTE, DEFAULT_DRUM_KIT, DrumKitPlayer, type DrumKitId } from './DrumKits';
 import TourGuide, { type TourStep } from './TourGuide';
 import SecretPiano from './SecretPiano';
 import Mp3ToMidi from './Mp3ToMidi';
@@ -577,7 +578,11 @@ interface TrackRowProps {
   volume: number;
   pan: number;
   canUseSynth: boolean;
+  isDrumPiece: boolean;
+  drumKit: string;
+  drumStatus: string;
   groupedGm: Record<string, { id: number; name: string }[]>;
+  onKit: (id: string, kit: DrumKitId) => void;
   onToggleMute: (id: string) => void;
   onToggleSolo: (id: string) => void;
   onPreview: (t: TrackDef) => void;
@@ -597,9 +602,9 @@ function TrackRowComponent(props: TrackRowProps) {
   const {
     track, channelIndex, row, winStart, winEnd, gridTemplate, trackCount,
     isSelected, isHeld, isMuted, isSolo, engine, activePreset, currentGm,
-    status, velocity, volume, pan, canUseSynth, groupedGm,
+    status, velocity, volume, pan, canUseSynth, isDrumPiece, drumKit, drumStatus, groupedGm,
     onToggleMute, onToggleSolo, onPreview, onToggleSelect, onEngine,
-    onInstrument, onPreset, onVelocity, onVolume, onPan, onRemove, onHold, onPad,
+    onInstrument, onPreset, onVelocity, onVolume, onPan, onRemove, onHold, onPad, onKit,
   } = props;
   const panLabel = pan > 0 ? `R${pan}` : pan < 0 ? `L${Math.abs(pan)}` : 'center';
   return (
@@ -696,20 +701,33 @@ function TrackRowComponent(props: TrackRowProps) {
               <option value="soundfont">GM</option>
             </select>
 
-            <select
-              value={currentGm}
-              onChange={e => onInstrument(track, Number(e.target.value))}
-              style={{ ...selectStyle, color: track.color, flex: 1 }}
-              title="General MIDI SoundFont (all 128 instruments)"
-            >
-              {Object.entries(groupedGm).map(([cat, insts]) => (
-                <optgroup key={cat} label={cat}>
-                  {insts.map(inst => (
-                    <option key={inst.id} value={inst.id}>{inst.name}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            {isDrumPiece && engine === 'synth' ? (
+              <select
+                value={drumKit}
+                onChange={e => onKit(track.id, e.target.value as DrumKitId)}
+                style={{ ...selectStyle, color: track.color, flex: 1 }}
+                title="Real sampled drum kit"
+              >
+                {DRUM_KITS.map(k => (
+                  <option key={k.id} value={k.id}>{k.name}</option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={currentGm}
+                onChange={e => onInstrument(track, Number(e.target.value))}
+                style={{ ...selectStyle, color: track.color, flex: 1 }}
+                title="General MIDI SoundFont (all 128 instruments)"
+              >
+                {Object.entries(groupedGm).map(([cat, insts]) => (
+                  <optgroup key={cat} label={cat}>
+                    {insts.map(inst => (
+                      <option key={inst.id} value={inst.id}>{inst.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
 
             <select
               value={activePreset}
@@ -739,6 +757,14 @@ function TrackRowComponent(props: TrackRowProps) {
                 style={{ fontSize: 8, fontWeight: 700, color: status === 'loading' ? '#ffd600' : status === 'error' ? '#ff5252' : '#00e676', flexShrink: 0 }}
               >
                 {status === 'loading' ? '…' : status === 'error' ? '!' : 'HD'}
+              </span>
+            )}
+            {isDrumPiece && engine === 'synth' && (
+              <span
+                title={drumStatus === 'loading' ? 'Loading drum samples…' : drumStatus === 'error' ? 'Drums failed, synth fallback' : 'Real drum samples ready'}
+                style={{ fontSize: 8, fontWeight: 700, color: drumStatus === 'loading' ? '#ffd600' : drumStatus === 'error' ? '#ff5252' : '#00e676', flexShrink: 0 }}
+              >
+                {drumStatus === 'loading' ? '…' : drumStatus === 'error' ? '!' : 'HD'}
               </span>
             )}
           </div>
@@ -849,6 +875,9 @@ function trackRowEqual(a: TrackRowProps, b: TrackRowProps) {
     && a.volume === b.volume
     && a.pan === b.pan
     && a.canUseSynth === b.canUseSynth
+    && a.isDrumPiece === b.isDrumPiece
+    && a.drumKit === b.drumKit
+    && a.drumStatus === b.drumStatus
     && a.groupedGm === b.groupedGm;
 }
 
@@ -865,42 +894,92 @@ const selectStyle: React.CSSProperties = {
   minWidth: 0
 };
 
+interface AutosavedSong {
+  app: string;
+  bpm?: number;
+  stepCount?: number;
+  tracks?: TrackDef[];
+  arrangementClips?: InstrumentClip[];
+  selectedTracks?: string[];
+  holdTones?: Record<string, boolean>;
+  mutedTracks?: Record<string, boolean>;
+  soloTracks?: Record<string, boolean>;
+  trackPresets?: Record<string, string>;
+  trackEngine?: Record<string, TrackEngine>;
+  trackVelocity?: Record<string, number>;
+  trackVolume?: Record<string, number>;
+  trackPan?: Record<string, number>;
+  trackSustain?: Record<string, { down: number; up: number }[]>;
+  trackGmInstruments?: Record<string, number>;
+  trackDrumKit?: Record<string, DrumKitId>;
+  activeView?: string;
+}
+
+const AUTOSAVE_KEY = 'snuzy_autosave_v1';
+
+function loadAutosave(): AutosavedSong | null {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw || raw.length > 4000000) return null;
+    const d = JSON.parse(raw);
+    if (!d || d.app !== 'snuzy-workstation' || !Array.isArray(d.tracks) || !Array.isArray(d.arrangementClips)) return null;
+    return d as AutosavedSong;
+  } catch {
+    return null;
+  }
+}
+
 export default function SequencerWorkstation() {
+  // Session restore: an autosaved song opens instantly (no re-parse);
+  // otherwise the baked showcase song is the starting state.
+  const [savedSong] = useState<AutosavedSong | null>(loadAutosave);
   // Preset startup song, baked in from public/midi/placeholder.mid via
   // `npm run showcase` — renders instantly, no fetch, no loading flash.
-  const [bpm, setBpm] = useState<number>(SHOWCASE_SONG.bpm);
-  const [stepCount, setStepCount] = useState<number>(SHOWCASE_SONG.stepCount);
+  const [bpm, setBpm] = useState<number>(savedSong?.bpm ?? SHOWCASE_SONG.bpm);
+  const [stepCount, setStepCount] = useState<number>(savedSong?.stepCount ?? SHOWCASE_SONG.stepCount);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [autoFollow, setAutoFollow] = useState<boolean>(true);
-  const [activeView, setActiveView] = useState<'arrangement' | 'steps'>('arrangement');
-  const [arrangementClips, setArrangementClips] = useState<InstrumentClip[]>(() => SHOWCASE_CLIPS.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) })));
-  const [tracks, setTracks] = useState<TrackDef[]>(() => SHOWCASE_TRACKS.map(t => ({ ...t, presets: MIDI_NOTE_PRESETS })));
-  const [selectedTracks, setSelectedTracks] = useState<string[]>(() => [...SHOWCASE_SONG.selected]);
-  const [holdTones, setHoldTones] = useState<Record<string, boolean>>({});
-  const [mutedTracks, setMutedTracks] = useState<Record<string, boolean>>({});
-  const [soloTracks, setSoloTracks] = useState<Record<string, boolean>>({});
+  const [activeView, setActiveView] = useState<'arrangement' | 'steps'>(savedSong?.activeView === 'steps' ? 'steps' : 'arrangement');
+  const [arrangementClips, setArrangementClips] = useState<InstrumentClip[]>(() => (
+    savedSong && savedSong.arrangementClips!.length > 0
+      ? savedSong.arrangementClips!.map(c => ({ ...c, notes: (c.notes || []).map(n => ({ ...n })) }))
+      : SHOWCASE_CLIPS.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) }))
+  ));
+  const [tracks, setTracks] = useState<TrackDef[]>(() => (
+    savedSong && savedSong.tracks!.length > 0
+      ? savedSong.tracks!.map(t => ({ ...t, presets: Array.isArray(t.presets) && t.presets.length > 0 ? t.presets : MIDI_NOTE_PRESETS }))
+      : SHOWCASE_TRACKS.map(t => ({ ...t, presets: MIDI_NOTE_PRESETS }))
+  ));
+  const [selectedTracks, setSelectedTracks] = useState<string[]>(() => (
+    savedSong?.selectedTracks && savedSong.selectedTracks.length > 0 ? [...savedSong.selectedTracks] : [...SHOWCASE_SONG.selected]
+  ));
+  const [holdTones, setHoldTones] = useState<Record<string, boolean>>(() => ({ ...(savedSong?.holdTones ?? {}) }));
+  const [mutedTracks, setMutedTracks] = useState<Record<string, boolean>>(() => ({ ...(savedSong?.mutedTracks ?? {}) }));
+  const [soloTracks, setSoloTracks] = useState<Record<string, boolean>>(() => ({ ...(savedSong?.soloTracks ?? {}) }));
   const [midiToast, setMidiToast] = useState<{ visible: boolean; fileName: string; title: string; sub: string }>({ visible: false, fileName: '', title: 'MIDI IMPORTED', sub: 'Mapped to sequencer channels' });
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [trackPresets, setTrackPresets] = useState<Record<string, string>>(() => ({ ...(SHOWCASE_SONG.presets as Record<string, string>) }));
+  const [trackPresets, setTrackPresets] = useState<Record<string, string>>(() => ({ ...((savedSong?.trackPresets ?? SHOWCASE_SONG.presets) as Record<string, string>) }));
 
-  const [trackEngine, setTrackEngine] = useState<Record<string, TrackEngine>>(() => ({ ...(SHOWCASE_SONG.gm ? Object.fromEntries(Object.keys(SHOWCASE_SONG.gm).map(id => [id, 'soundfont' as TrackEngine])) : {}) }));
+  const [trackEngine, setTrackEngine] = useState<Record<string, TrackEngine>>(() => ({ ...((savedSong?.trackEngine ?? (SHOWCASE_SONG.gm ? Object.fromEntries(Object.keys(SHOWCASE_SONG.gm).map(id => [id, 'soundfont' as TrackEngine])) : {})) as Record<string, TrackEngine>) }));
 
-  const [trackVelocity, setTrackVelocity] = useState<Record<string, number>>(() => ({ ...(SHOWCASE_SONG.velocity as Record<string, number>) }));
+  const [trackVelocity, setTrackVelocity] = useState<Record<string, number>>(() => ({ ...((savedSong?.trackVelocity ?? SHOWCASE_SONG.velocity) as Record<string, number>) }));
 
   // Mixer: per-track volume (0-100, default 100) and pan (-50..50, default 0).
   // Damper pedal regions per track (song steps), parsed from MIDI CC64.
-  const [trackSustain, setTrackSustain] = useState<Record<string, { down: number; up: number }[]>>({});
+  const [trackSustain, setTrackSustain] = useState<Record<string, { down: number; up: number }[]>>(() => ({ ...(savedSong?.trackSustain ?? {}) }));
   const trackSustainRef = useRef(trackSustain);
   useEffect(() => { trackSustainRef.current = trackSustain; }, [trackSustain]);
 
-  const [trackVolume, setTrackVolume] = useState<Record<string, number>>(() => (
-    Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 100]))
-  ));
-  const [trackPan, setTrackPan] = useState<Record<string, number>>(() => (
-    Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 0]))
-  ));
+  const [trackVolume, setTrackVolume] = useState<Record<string, number>>(() => ({
+    ...Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 100])),
+    ...(savedSong?.trackVolume ?? {}),
+  }));
+  const [trackPan, setTrackPan] = useState<Record<string, number>>(() => ({
+    ...Object.fromEntries([...SHOWCASE_SONG.selected, ...TRACK_DEFS.map(t => t.id)].map(id => [id, 0])),
+    ...(savedSong?.trackPan ?? {}),
+  }));
 
   // Boot preloader: the app reveals itself only once the audio engine and
   // every showcase sound are actually ready, so nothing stutters at startup.
@@ -1041,7 +1120,15 @@ export default function SequencerWorkstation() {
 
   const groupedGmInstruments = React.useMemo(() => getInstrumentsByCategory(), []);
 
-  const [trackGmInstruments, setTrackGmInstruments] = useState<Record<string, number>>(() => ({ ...(SHOWCASE_SONG.gm as Record<string, number>) }));
+  const [trackGmInstruments, setTrackGmInstruments] = useState<Record<string, number>>(() => ({ ...((savedSong?.trackGmInstruments ?? SHOWCASE_SONG.gm) as Record<string, number>) }));
+
+  // Sampled drum kits per track (real recordings instead of synth blips).
+  const [trackDrumKit, setTrackDrumKitState] = useState<Record<string, DrumKitId>>(() => ({ ...(savedSong?.trackDrumKit ?? {}) }));
+  const trackDrumKitRef = useRef(trackDrumKit);
+  useEffect(() => { trackDrumKitRef.current = trackDrumKit; }, [trackDrumKit]);
+  const [drumStatus, setDrumStatus] = useState<Record<string, string>>({});
+  const drumPlayerRef = useRef<DrumKitPlayer | null>(null);
+  const trackDrumRef = useRef<Record<string, Tone.Sampler>>({});
 
   const trackGmInstrumentsRef = useRef(trackGmInstruments);
   useEffect(() => { trackGmInstrumentsRef.current = trackGmInstruments; }, [trackGmInstruments]);
@@ -1100,6 +1187,64 @@ export default function SequencerWorkstation() {
   const disposeTrackSound = (trackId: string) => {
     disposeTrackSynth(trackId);
     disposeTrackSampler(trackId);
+    disposeTrackDrums(trackId);
+  };
+
+  const disposeTrackDrums = (trackId: string) => {
+    const prefix = `${trackId}:`;
+    Object.keys(trackDrumRef.current).forEach(key => {
+      if (key === trackId || key.startsWith(prefix)) {
+        try { trackDrumRef.current[key].disconnect(); } catch {}
+        delete trackDrumRef.current[key];
+      }
+    });
+  };
+
+  const drumStatusKey = (trackId: string) => {
+    const piece = DRUM_PIECE_FILE[tracksRef.current.find(t => t.id === trackId)?.type ?? ''];
+    const kit = trackDrumKitRef.current[trackId] ?? DEFAULT_DRUM_KIT;
+    return piece ? `${kit}:${piece}` : null;
+  };
+
+  const ensureTrackDrums = async (track: TrackDef) => {
+    const piece = DRUM_PIECE_FILE[track.type];
+    if (!piece) return null;
+    const kit = trackDrumKitRef.current[track.id] ?? DEFAULT_DRUM_KIT;
+    const key = `${track.id}:${kit}`;
+    const cached = trackDrumRef.current[key];
+    if (cached) return cached;
+    const chain = ensureTrackChain(track.id);
+    const player = drumPlayerRef.current;
+    if (!chain || !player) return null;
+    setDrumStatus(prev => ({ ...prev, [track.id]: 'loading' }));
+    const sampler = await player.createTrackSampler(kit, piece, chain.gain);
+    if (!sampler) {
+      setDrumStatus(prev => ({ ...prev, [track.id]: 'error' }));
+      return null;
+    }
+    if (!trackChainsRef.current[track.id]) {
+      try { sampler.disconnect(); } catch {}
+      return null;
+    }
+    trackDrumRef.current[key] = sampler;
+    setDrumStatus(prev => ({ ...prev, [track.id]: 'loaded' }));
+    return sampler;
+  };
+
+  const setTrackDrumKit = (trackId: string, kitId: DrumKitId) => {
+    pushHistory();
+    disposeTrackDrums(trackId);
+    trackDrumKitRef.current = { ...trackDrumKitRef.current, [trackId]: kitId };
+    setTrackDrumKitState(prev => ({ ...prev, [trackId]: kitId }));
+    const track = tracksRef.current.find(t => t.id === trackId);
+    if (track) {
+      ensureTrackDrums({ ...track }).then(sampler => {
+        if (sampler) {
+          const note = DRUM_PIECE_NOTE[track.type] ?? 'C4';
+          try { sampler.triggerAttackRelease(note, '16n', Tone.now(), (trackVelocityRef.current[trackId] ?? 100) / 127); } catch {}
+        }
+      }).catch(() => {});
+    }
   };
 
   const disposeTrackChain = (trackId: string) => {
@@ -1133,9 +1278,10 @@ export default function SequencerWorkstation() {
     if (!chain || !player) return null;
     const sampler = await player.createTrackSampler(gmId, chain.gain);
     if (!sampler) return null;
-    // Track may have been removed while loading.
+    // Track may have been removed while loading (disconnect only: buffers
+    // are shared with every other track).
     if (!trackChainsRef.current[trackId]) {
-      try { sampler.dispose(); } catch {}
+      try { sampler.disconnect(); } catch {}
       return null;
     }
     trackSamplersRef.current[key] = sampler;
@@ -1216,6 +1362,41 @@ export default function SequencerWorkstation() {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
 
+  // Session autosave (debounced): your song, mix, and view survive refreshes
+  // with zero re-parsing. Cleared only via "Reset to showcase song".
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      try {
+        const data = {
+          app: 'snuzy-workstation',
+          version: '3.0',
+          timestamp: Date.now(),
+          bpm: bpmRef.current,
+          stepCount: stepCountRef.current,
+          tracks: tracksRef.current,
+          trackPresets: trackPresetsRef.current,
+          trackGmInstruments: trackGmInstrumentsRef.current,
+          trackEngine: trackEngineRef.current,
+          trackVelocity: trackVelocityRef.current,
+          trackVolume: trackVolumeRef.current,
+          trackPan: trackPanRef.current,
+          trackSustain: trackSustainRef.current,
+          trackDrumKit: trackDrumKitRef.current,
+          selectedTracks: selectedTracksRef.current,
+          holdTones: holdTonesRef.current,
+          mutedTracks: mutedTracksRef.current,
+          soloTracks: soloTracksRef.current,
+          activeView: activeViewRef.current,
+          arrangementClips: arrangementClipsRef.current,
+        };
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
+      } catch {
+        // Quota or privacy mode — session simply won't persist.
+      }
+    }, 2000);
+    return () => window.clearTimeout(id);
+  }, [tracks, arrangementClips, trackPresets, trackGmInstruments, trackEngine, trackVelocity, trackVolume, trackPan, trackSustain, trackDrumKit, selectedTracks, holdTones, mutedTracks, soloTracks, bpm, stepCount, activeView]);
+
   // Ctrl/Cmd+Z undo, Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) redo.
   // Skipped inside text fields so native text undo keeps working.
   useEffect(() => {
@@ -1272,6 +1453,9 @@ export default function SequencerWorkstation() {
       setSfStatus(prev => ({ ...prev, [instrumentId]: state }));
     };
 
+    const drumPlayer = new DrumKitPlayer();
+    drumPlayerRef.current = drumPlayer;
+
     // Warm the GM sample maps, then build one mixer strip + sound per track
     // so volume/pan apply per track from the very first note. Every step
     // reports to the boot preloader; the app reveals itself when done.
@@ -1309,6 +1493,7 @@ export default function SequencerWorkstation() {
         ensureTrackChain(track.id);
         if ((trackEngine[track.id] ?? (track.type === 'soundfont' ? 'soundfont' : 'synth')) !== 'soundfont') {
           ensureTrackSynth(track);
+          if (DRUM_PIECE_FILE[track.type]) ensureTrackDrums(track).catch(() => {});
         }
         tick('Warming up tracks…');
       });
@@ -1333,6 +1518,9 @@ export default function SequencerWorkstation() {
       limiterRef.current = null;
       try { soundFontPlayerRef.current?.dispose(); } catch {}
       soundFontPlayerRef.current = null;
+      try { drumPlayerRef.current?.dispose(); } catch {}
+      drumPlayerRef.current = null;
+      trackDrumRef.current = {};
       stepColCacheRef.current = [];
     };
   }, []);
@@ -1351,8 +1539,8 @@ export default function SequencerWorkstation() {
     return trackDef.type === 'soundfont';
   };
 
-  // Single trigger path for every track: per-track Tone synth or per-track
-  // SoundFont sampler, both routed through the track's mixer strip.
+  // Single trigger path for every track: per-track Tone synth, sampled drum
+  // kit, or per-track SoundFont sampler — all through the track's mixer.
   // gmOverride plays this hit with a per-block instrument instead.
   const fireTrackSound = (trackDef: TrackDef, currentNote: string, triggerTime: number, velocity: number, duration: string | number = '8n', gmOverride?: number, sustainDown = false) => {
     try {
@@ -1370,6 +1558,16 @@ export default function SequencerWorkstation() {
           sampler.triggerAttackRelease(note, duration, triggerTime, velocity);
         }
         return;
+      }
+      // Real drum recordings first; synth fallback when unmapped/unloaded.
+      const piece = DRUM_PIECE_FILE[trackDef.type];
+      if (piece) {
+        const kit = trackDrumKitRef.current[trackDef.id] ?? DEFAULT_DRUM_KIT;
+        const sampler = trackDrumRef.current[`${trackDef.id}:${kit}`];
+        if (sampler && samplerHasRoom(sampler, '16n')) {
+          sampler.triggerAttackRelease(DRUM_PIECE_NOTE[trackDef.type] ?? 'C4', '16n', triggerTime, velocity);
+          return;
+        }
       }
       const inst = ensureTrackSynth(trackDef);
       if (!inst) return;
@@ -1416,6 +1614,14 @@ export default function SequencerWorkstation() {
         const sampler = await ensureTrackSamplerById(trackDef.id, gmId);
         if (!sampler || !samplerHasRoom(sampler, '8n')) return;
         sampler.triggerAttackRelease(currentNote || 'C4', '8n', triggerTime, velocity);
+        return;
+      }
+
+      if (DRUM_PIECE_FILE[trackDef.type]) {
+        const sampler = await ensureTrackDrums(trackDef);
+        if (sampler && samplerHasRoom(sampler, '16n')) {
+          sampler.triggerAttackRelease(DRUM_PIECE_NOTE[trackDef.type] ?? 'C4', '16n', triggerTime, velocity);
+        }
         return;
       }
 
@@ -1750,18 +1956,26 @@ export default function SequencerWorkstation() {
       presets: src.type === 'soundfont' || !template ? MIDI_NOTE_PRESETS : [...src.presets]
     };
     const gmId = defaultGmForTrack(track);
+    // Library drum tracks open on their sampled kit, not a GM program.
+    const eng: TrackEngine = template && DRUM_PIECE_FILE[template.type] ? 'synth' : 'soundfont';
     pushHistory();
     setTracks(prev => [...prev, track]);
     setSelectedTracks(prev => [...prev, id]);
     setTrackPresets(prev => ({ ...prev, [id]: track.type === 'soundfont' ? track.note : (track.presets[0]?.id || 'C4') }));
-    setTrackEngine(prev => ({ ...prev, [id]: 'soundfont' }));
+    setTrackEngine(prev => ({ ...prev, [id]: eng }));
     setTrackGmInstruments(prev => ({ ...prev, [id]: gmId }));
     setTrackVelocity(prev => ({ ...prev, [id]: 100 }));
     setTrackVolume(prev => ({ ...prev, [id]: 100 }));
     setTrackPan(prev => ({ ...prev, [id]: 0 }));
-    loadSoundFontInstrument(gmId);
+    setTrackDrumKitState(prev => (prev[id] !== undefined ? prev : { ...prev, [id]: DEFAULT_DRUM_KIT }));
     ensureTrackChain(id);
-    ensureTrackSamplerById(id, gmId).catch(() => {});
+    if (eng === 'soundfont') {
+      loadSoundFontInstrument(gmId);
+      ensureTrackSamplerById(id, gmId).catch(() => {});
+    } else {
+      ensureTrackSynth(track);
+      if (DRUM_PIECE_FILE[track.type]) ensureTrackDrums(track).catch(() => {});
+    }
   };
 
   const removeChannel = (trackId: string) => {
@@ -1819,13 +2033,16 @@ export default function SequencerWorkstation() {
       ensureTrackSamplerById(track.id, gmId).catch(() => {});
     } else {
       disposeTrackSampler(track.id);
+      disposeTrackDrums(track.id);
       ensureTrackSynth(track);
+      if (DRUM_PIECE_FILE[track.type]) ensureTrackDrums(track).catch(() => {});
     }
   };
 
   const setChannelInstrument = async (track: TrackDef, gmId: number) => {
     pushHistory();
     releaseTrackVoices(track.id);
+    disposeTrackDrums(track.id);
     setTrackGmInstruments(prev => ({ ...prev, [track.id]: gmId }));
     setTrackEngine(prev => ({ ...prev, [track.id]: 'soundfont' }));
     const gm = GM_INSTRUMENTS[gmId];
@@ -2006,6 +2223,7 @@ export default function SequencerWorkstation() {
         trackVolume,
         trackPan,
         trackSustain,
+        trackDrumKit,
         selectedTracks,
         holdTones,
         mutedTracks,
@@ -2053,6 +2271,7 @@ export default function SequencerWorkstation() {
     trackVolume: Record<string, number>;
     trackPan: Record<string, number>;
     trackSustain: Record<string, { down: number; up: number }[]>;
+    trackDrumKit: Record<string, DrumKitId>;
     selectedTracks: string[];
     holdTones: Record<string, boolean>;
     mutedTracks: Record<string, boolean>;
@@ -2078,6 +2297,7 @@ export default function SequencerWorkstation() {
     trackVolume: trackVolumeRef.current,
     trackPan: trackPanRef.current,
     trackSustain: trackSustainRef.current,
+    trackDrumKit: trackDrumKitRef.current,
     selectedTracks: selectedTracksRef.current,
     holdTones: holdTonesRef.current,
     mutedTracks: mutedTracksRef.current,
@@ -2106,11 +2326,27 @@ export default function SequencerWorkstation() {
     gmMap: Record<string, number>,
     engMap: Record<string, TrackEngine>,
     volMap: Record<string, number>,
-    panMap: Record<string, number>
+    panMap: Record<string, number>,
+    kitMap?: Record<string, DrumKitId>
   ) => {
     const ids = new Set(list.map(t => t.id));
     Object.keys(trackChainsRef.current).forEach(id => {
       if (!ids.has(id)) disposeTrackChain(id);
+    });
+    if (kitMap) {
+      trackDrumKitRef.current = { ...kitMap };
+      setTrackDrumKitState({ ...kitMap });
+    }
+    // Drop stale-kit drum samplers for kept tracks (fresh kit re-ensured below).
+    list.forEach(t => {
+      const kit = (kitMap ?? trackDrumKitRef.current)[t.id] ?? DEFAULT_DRUM_KIT;
+      const want = `${t.id}:${kit}`;
+      Object.keys(trackDrumRef.current).forEach(key => {
+        if (key !== want && (key === t.id || key.startsWith(`${t.id}:`))) {
+          try { trackDrumRef.current[key].disconnect(); } catch {}
+          delete trackDrumRef.current[key];
+        }
+      });
     });
     list.forEach(t => {
       const chain = ensureTrackChain(t.id);
@@ -2125,6 +2361,7 @@ export default function SequencerWorkstation() {
         ensureTrackSamplerById(t.id, gmMap[t.id] ?? defaultGmForTrack(t)).catch(() => {});
       } else {
         ensureTrackSynth(t);
+        if (DRUM_PIECE_FILE[t.type]) ensureTrackDrums({ ...t }).catch(() => {});
       }
     });
   };
@@ -2149,7 +2386,7 @@ export default function SequencerWorkstation() {
     setSoloTracks(snap.soloTracks);
     setArrangementClips(snap.arrangementClips);
     stepColCacheRef.current = [];
-    syncTrackSounds(snap.tracks, snap.trackGmInstruments, snap.trackEngine, snap.trackVolume, snap.trackPan);
+    syncTrackSounds(snap.tracks, snap.trackGmInstruments, snap.trackEngine, snap.trackVolume, snap.trackPan, snap.trackDrumKit ?? {});
   };
 
   const undo = () => {
@@ -2282,6 +2519,10 @@ export default function SequencerWorkstation() {
       setActiveView('steps');
     }
     if (data.trackSustain) setTrackSustain(data.trackSustain);
+    if (data.trackDrumKit) {
+      trackDrumKitRef.current = { ...(data.trackDrumKit as Record<string, DrumKitId>) };
+      setTrackDrumKitState({ ...(data.trackDrumKit as Record<string, DrumKitId>) });
+    }
     releaseAllVoices();
     sustainPrevRef.current = {};
     const programs = new Set<number>(Object.values((data.trackGmInstruments || {}) as Record<string, number>));
@@ -2300,6 +2541,7 @@ export default function SequencerWorkstation() {
           ensureTrackSamplerById(t.id, g).catch(() => {});
         } else {
           ensureTrackSynth(t);
+          if (DRUM_PIECE_FILE[t.type]) ensureTrackDrums(t).catch(() => {});
         }
       });
     }
@@ -2546,6 +2788,15 @@ export default function SequencerWorkstation() {
         ],
       },
       { label: 'Instrument', hint: gmName, submenu: instrumentSubmenu(currentGm, gmId => setChannelInstrument(track, gmId)) },
+      ...(DRUM_PIECE_FILE[track.type] && engine === 'synth' ? [{
+        label: 'Drum kit',
+        hint: DRUM_KITS.find(k => k.id === (trackDrumKit[track.id] ?? DEFAULT_DRUM_KIT))?.name ?? '',
+        submenu: DRUM_KITS.map(k => ({
+          label: k.name,
+          checked: (trackDrumKit[track.id] ?? DEFAULT_DRUM_KIT) === k.id,
+          onClick: () => setTrackDrumKit(track.id, k.id),
+        })),
+      }] : []),
       {
         label: 'Note / pitch', hint: activePreset,
         submenu: (engine === 'soundfont' ? MIDI_NOTE_PRESETS : track.presets).map(p => ({
@@ -2590,6 +2841,17 @@ export default function SequencerWorkstation() {
     { label: 'Extend timeline +16 bars', onClick: () => extendTimeline(256) },
     { separator: true, label: '' },
     { label: 'Clear pattern', danger: true, onClick: () => clearGrid() },
+    {
+      label: 'Reset to showcase song', danger: true,
+      onClick: () => {
+        const ok = window.confirm(
+          'Reset to the showcase song?\n\nYour current song, edits, and mix will be permanently deleted. This cannot be undone.'
+        );
+        if (!ok) return;
+        try { localStorage.removeItem(AUTOSAVE_KEY); } catch {}
+        window.location.reload();
+      },
+    },
   ]);
 
   // ── Guided tour ────────────────────────────────────────────────────────────
@@ -3017,7 +3279,11 @@ export default function SequencerWorkstation() {
                 volume={trackVolume[track.id] ?? 100}
                 pan={trackPan[track.id] ?? 0}
                 canUseSynth={track.type !== 'soundfont'}
+                isDrumPiece={DRUM_PIECE_FILE[track.type] !== undefined}
+                drumKit={trackDrumKit[track.id] ?? DEFAULT_DRUM_KIT}
+                drumStatus={drumStatus[track.id] ?? 'idle'}
                 groupedGm={groupedGmInstruments}
+                onKit={setTrackDrumKit}
                 onToggleMute={id => { pushHistory(); setMutedTracks(prev => ({ ...prev, [id]: !prev[id] })); }}
                 onToggleSolo={id => { pushHistory(); setSoloTracks(prev => ({ ...prev, [id]: !prev[id] })); }}
                 onPreview={triggerInstrument}
