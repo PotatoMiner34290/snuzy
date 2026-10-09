@@ -277,8 +277,8 @@ button:active {
 .arrangement-heading > div { display: flex; gap: 10px; align-items: baseline; }
 .arrangement-heading span { color: #8290a5; font-size: 11px; }
 .arrangement-hint { color: #00b8cc !important; }
-.arrangement-scroll { max-height: 52vh; overflow: auto; scrollbar-color: #00a8bb #171c29; scroll-behavior: smooth; }
-.arrangement-canvas { position: relative; min-width: 100%; background: repeating-linear-gradient(to right, transparent 0, transparent calc((100% - 180px) / 16 - 1px), #30384a calc((100% - 180px) / 16)); }
+.arrangement-scroll { max-height: 64vh; overflow: auto; scrollbar-gutter: stable; scrollbar-color: #00a8bb #171c29; scroll-behavior: smooth; }
+.arrangement-canvas { position: relative; min-width: 100%; padding-bottom: 20px; background: repeating-linear-gradient(to right, transparent 0, transparent calc((100% - 180px) / 16 - 1px), #30384a calc((100% - 180px) / 16)); }
 .arrangement-ruler { position: sticky; top: 0; z-index: 8; display: grid; min-height: 30px; background: #171c28; }
 .arrangement-ruler > div { padding: 8px 7px; border-right: 1px solid #374156; color: #738096; font-size: 9px; font-weight: 800; }
 .arrangement-lane { display: grid; grid-template-columns: 180px 1fr; min-height: 58px; border-top: 1px solid #242b3b; }
