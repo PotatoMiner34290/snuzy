@@ -15,6 +15,7 @@ import { SALA_GM_ID, SALA_NAME, CASIO_GM_ID, CASIO_NAME, PREMIUM_BANKS, premiumG
 import TourGuide, { type TourStep } from './TourGuide';
 import SecretPiano from './SecretPiano';
 import Mp3ToMidi from './Mp3ToMidi';
+import { createSustainedVoice, type SustainedVoice } from './SustainedVoice';
 import { SHOWCASE_SONG } from './ShowcaseSong';
 
 const SHOWCASE_TRACKS = SHOWCASE_SONG.tracks as unknown as TrackDef[];
@@ -1160,6 +1161,8 @@ export default function SequencerWorkstation() {
   // legato lines under a held pedal, never get dropped.
   const MAX_SAMPLER_VOICES = 28;
   const samplerVoicesRef = useRef(new Map<Tone.Sampler, { note: string; until: number }[]>());
+  // Cap on simultaneously pedal-held looping voices per track.
+  const MAX_HELD_VOICES = 24;
 
   const forgetHeldVoice = (sampler: Tone.Sampler, note: string) => {
     Object.keys(heldVoicesRef.current).forEach(trackId => {
@@ -1339,6 +1342,7 @@ export default function SequencerWorkstation() {
   };
 
   const disposeTrackSound = (trackId: string) => {
+    releaseTrackVoices(trackId);
     disposeTrackSynth(trackId);
     disposeTrackSampler(trackId);
     disposeTrackDrums(trackId);
@@ -1497,7 +1501,7 @@ export default function SequencerWorkstation() {
   };
 
   // ── Damper pedal: held voices ────────────────────────────────────────────
-  const heldVoicesRef = useRef<Record<string, Array<{ sampler?: Tone.Sampler; inst?: any; note: string }>>>({});
+  const heldVoicesRef = useRef<Record<string, Array<{ sampler?: Tone.Sampler; inst?: any; note: string; voice?: SustainedVoice }>>>({});
   const sustainPrevRef = useRef<Record<string, boolean>>({});
   // Continuous-mode latch: once the playhead reaches an endless (up: -1)
   // region, the pedal never lifts again — it survives the loop wrap back to
@@ -1545,7 +1549,9 @@ export default function SequencerWorkstation() {
     const t = time !== undefined ? time : Tone.now();
     voices.forEach(v => {
       try {
-        if (v.sampler) {
+        if (v.voice) {
+          v.voice.release(t);
+        } else if (v.sampler) {
           v.sampler.triggerRelease(v.note, t);
           const ledger = samplerVoicesRef.current.get(v.sampler);
           if (ledger) {
@@ -1755,6 +1761,7 @@ export default function SequencerWorkstation() {
 
     return () => {
       cancelled = true;
+      try { releaseAllVoices(); } catch {}
       try {
         Tone.Transport.stop();
         Tone.Transport.cancel();
@@ -1802,15 +1809,45 @@ export default function SequencerWorkstation() {
         const sampler = trackSamplersRef.current[samplerKey(trackDef.id, gmId)];
         if (!sampler) return;
         const note = currentNote || 'C4';
-        trackVoice(sampler, note, duration, sustainDown);
         if (sustainDown) {
+          // Held by the damper pedal: play a looping voice so the note rings
+          // for the whole pedal-down stretch instead of dying when the ~1.6s
+          // (GM) / ~5s (premium) one-shot sample runs out.
+          const chain = trackChainsRef.current[trackDef.id];
+          const buffers = (sampler as unknown as { _buffers?: Tone.ToneAudioBuffers })._buffers;
+          const voice = chain && buffers
+            ? createSustainedVoice(buffers, note, chain.gain, triggerTime, velocity)
+            : null;
+          if (voice) {
+            const list = (heldVoicesRef.current[trackDef.id] ||= []);
+            // Re-striking the same pitch replaces the previous held voice.
+            for (let i = list.length - 1; i >= 0; i--) {
+              if (list[i].note === note) {
+                try { list[i].sampler?.triggerRelease(note, triggerTime); } catch {}
+                try { list[i].inst?.triggerRelease(note, triggerTime); } catch {}
+                try { list[i].voice?.release(triggerTime); } catch {}
+                list.splice(i, 1);
+              }
+            }
+            while (list.length >= MAX_HELD_VOICES) {
+              const old = list.shift();
+              try { old?.sampler?.triggerRelease(old.note, triggerTime); } catch {}
+              try { old?.inst?.triggerRelease(old.note, triggerTime); } catch {}
+              try { old?.voice?.release(triggerTime); } catch {}
+            }
+            list.push({ voice, note });
+            return;
+          }
+          // Fallback if the buffers aren't ready.
+          trackVoice(sampler, note, duration, true);
           try {
             sampler.triggerAttack(note, triggerTime, velocity);
             (heldVoicesRef.current[trackDef.id] ||= []).push({ sampler, note });
           } catch {}
-        } else {
-          sampler.triggerAttackRelease(note, duration, triggerTime, velocity);
+          return;
         }
+        trackVoice(sampler, note, duration, false);
+        sampler.triggerAttackRelease(note, duration, triggerTime, velocity);
         return;
       }
       // Real drum recordings first; synth fallback when unmapped/unloaded.
