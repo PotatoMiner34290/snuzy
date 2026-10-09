@@ -44,6 +44,8 @@ interface Props {
   trackGmInstruments: Record<string, number>;
   onSetClipInstrument: (clipId: string, gmId: number | null) => void;
   onSeekStep?: (step: number) => void;
+  // Live playhead step (a ref so playback doesn't re-render this view).
+  playheadStepRef?: React.MutableRefObject<number>;
 }
 
 const PITCH_LOW = 21;
@@ -54,7 +56,7 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 const pitchName = (pitch: number) => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
 const uid = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-export default function ArrangementView({ tracks, stepCount, clips, setClips, sustain, setSustain, onExtend, trackGmInstruments, onSetClipInstrument, onSeekStep }: Props) {
+export default function ArrangementView({ tracks, stepCount, clips, setClips, sustain, setSustain, onExtend, trackGmInstruments, onSetClipInstrument, onSeekStep, playheadStepRef }: Props) {
   const groupedGm = useMemo(() => ({
     'Premium Keys': [
       { id: SALA_GM_ID, name: SALA_NAME, cdnName: '', category: 'Premium Keys' },
@@ -70,19 +72,36 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
   const [lengthDraft, setLengthDraft] = useState(() => String(clips[0]?.length ?? ''));
   // Marquee multi-select: marked blocks move/delete/duplicate/merge together.
   const [markedIds, setMarkedIds] = useState<string[]>([]);
+  // Multi-note selection inside the open block (Shift-click to add, Ctrl+A for all).
+  const [markedNoteIds, setMarkedNoteIds] = useState<string[]>([]);
   // Live damper-pedal region being painted (dashed ghost in the lane strip).
   const [sustainGhost, setSustainGhost] = useState<{ trackId: string; down: number; up: number } | null>(null);
+  // Human-readable description of what Ctrl+C last grabbed, for the Paste button.
+  const [clipboardLabel, setClipboardLabel] = useState<string>('');
   const markedRef = React.useRef<string[]>([]);
   const clipsRef = React.useRef(clips);
+  // Which editor the user last touched — decides what Ctrl+C copies.
+  const activePaneRef = React.useRef<'roll' | 'arrange'>('arrange');
+  const clipClipboard = React.useRef<InstrumentClip[]>([]);
+  const noteClipboard = React.useRef<ClipNote[]>([]);
+  const selectedClipIdRef = React.useRef(selectedClipId);
+  const markedNoteIdsRef = React.useRef<string[]>([]);
   React.useEffect(() => { markedRef.current = markedIds; }, [markedIds]);
   React.useEffect(() => { clipsRef.current = clips; }, [clips]);
+  React.useEffect(() => { selectedClipIdRef.current = selectedClipId; }, [selectedClipId]);
+  React.useEffect(() => { markedNoteIdsRef.current = markedNoteIds; }, [markedNoteIds]);
+  const setNoteSelection = (ids: string[]) => {
+    const unique = Array.from(new Set(ids));
+    setMarkedNoteIds(unique);
+    setSelectedNoteId(unique.length ? unique[unique.length - 1] : null);
+  };
   const pickSingle = (id: string | null) => {
     setSelectedClipId(id);
     setMarkedIds(id ? [id] : []);
   };
   const selectedClip = clips.find(clip => clip.id === selectedClipId) ?? null;
   const selectedNote = selectedClip?.notes.find(note => note.id === selectedNoteId) ?? null;
-  React.useEffect(() => { setSelectedNoteId(null); }, [selectedClipId]);
+  React.useEffect(() => { setSelectedNoteId(null); setMarkedNoteIds([]); }, [selectedClipId]);
   React.useEffect(() => { setLengthDraft(String(selectedClip?.length ?? '')); }, [selectedClipId, selectedClip?.length]);
   const bars = Math.ceil(stepCount / 16);
   const pxPerStep = stepCount > 512 ? 8 : stepCount > 256 ? 12 : stepCount > 128 ? 18 : 28;
@@ -204,65 +223,161 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
     pickSingle(right.id);
   };
 
-  const toggleNote = (pitch: number, start: number) => {
-    if (!selectedClip) return;
-    // Hit the whole held note, not just its first cell — otherwise a long
-    // note's body looked empty and clicking it only dropped a note on top.
-    const existing = selectedClip.notes.find(note => note.pitch === pitch && note.start === start)
-      ?? selectedClip.notes.find(note => note.pitch === pitch && note.start <= start && start < note.start + note.duration);
-    if (existing) {
-      if (selectedNoteId === existing.id) {
-        // Second click on the selected note deletes it.
-        updateClip(selectedClip.id, { notes: selectedClip.notes.filter(note => note.id !== existing.id) });
-        setSelectedNoteId(null);
-      } else {
-        // First click selects it so velocity can be edited below.
-        setSelectedNoteId(existing.id);
+  // Ctrl+C — copies whatever the user last worked on: marked notes if the
+  // piano roll is active, otherwise the marked/selected blocks (notes and all).
+  const copySelection = () => {
+    const clipId = selectedClipIdRef.current;
+    const clip = clipsRef.current.find(c => c.id === clipId);
+    if (activePaneRef.current === 'roll' && clip && markedNoteIdsRef.current.length > 0) {
+      const set = new Set(markedNoteIdsRef.current);
+      const notes = clip.notes.filter(n => set.has(n.id)).map(n => ({ ...n }));
+      if (notes.length) {
+        noteClipboard.current = notes;
+        clipClipboard.current = [];
+        setClipboardLabel(`${notes.length} note${notes.length > 1 ? 's' : ''}`);
+        return;
       }
-      return;
     }
-    const note = {
-      id: uid('note'), pitch, start,
-      duration: Math.min(noteLength, selectedClip.length - start), velocity: 100
-    };
-    updateClip(selectedClip.id, { notes: [...selectedClip.notes, note] });
-    setSelectedNoteId(note.id);
+    const ids = markedRef.current.length > 0 ? markedRef.current : (clipId ? [clipId] : []);
+    const src = ids.map(id => clipsRef.current.find(c => c.id === id)).filter((c): c is InstrumentClip => !!c);
+    if (src.length === 0) return;
+    clipClipboard.current = src.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) }));
+    noteClipboard.current = [];
+    setClipboardLabel(`${src.length} block${src.length > 1 ? 's' : ''}`);
+  };
+
+  // Del / Backspace / Ctrl+X — removes marked notes when the roll is active,
+  // otherwise the marked/selected blocks.
+  const deleteSelection = () => {
+    if (activePaneRef.current === 'roll' && selectedClipIdRef.current && markedNoteIdsRef.current.length > 0) {
+      const clip = clipsRef.current.find(c => c.id === selectedClipIdRef.current);
+      if (clip) {
+        const gone = new Set(markedNoteIdsRef.current);
+        setClips(previous => previous.map(c => c.id === clip.id ? { ...c, notes: c.notes.filter(n => !gone.has(n.id)) } : c));
+        setNoteSelection([]);
+        return;
+      }
+    }
+    const ids = markedRef.current.length > 0 ? markedRef.current : (selectedClipIdRef.current ? [selectedClipIdRef.current] : []);
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    setClips(previous => previous.filter(clip => !gone.has(clip.id)));
+    setSelectedClipId(null);
+    setMarkedIds([]);
+  };
+
+  const pasteNotes = () => {
+    const clip = clipsRef.current.find(c => c.id === selectedClipIdRef.current);
+    if (!clip) return;
+    const src = noteClipboard.current;
+    const minStart = Math.min(...src.map(n => n.start));
+    const maxEnd = Math.max(...src.map(n => n.start + n.duration));
+    const width = maxEnd - minStart;
+    const len = clip.length;
+    const headRel = (playheadStepRef?.current ?? 0) - clip.start;
+    let anchor = headRel > 0 && headRel < len ? headRel : maxEnd;
+    if (anchor + width > len) anchor = Math.max(0, len - width);
+    const taken = new Set(clip.notes.map(n => `${n.pitch}:${n.start}`));
+    const pasted: ClipNote[] = [];
+    src.forEach(n => {
+      const start = anchor + (n.start - minStart);
+      if (start < 0 || start >= len) return;
+      const key = `${n.pitch}:${start}`;
+      if (taken.has(key)) return;
+      taken.add(key);
+      pasted.push({ id: uid('note'), pitch: n.pitch, start, duration: Math.max(1, Math.min(n.duration, len - start)), velocity: n.velocity });
+    });
+    if (pasted.length === 0) return;
+    setClips(previous => previous.map(c => c.id === clip.id ? { ...c, notes: [...c.notes, ...pasted] } : c));
+    setNoteSelection(pasted.map(n => n.id));
+  };
+
+  const pasteClips = () => {
+    const src = clipClipboard.current;
+    if (src.length === 0) return;
+    const minStart = Math.min(...src.map(c => c.start));
+    const maxEnd = Math.max(...src.map(c => c.start + c.length));
+    const width = maxEnd - minStart;
+    const head = playheadStepRef?.current ?? 0;
+    const anchor = Math.max(0, Math.min(head > 0 ? head : maxEnd, Math.max(0, stepCount - width)));
+    const copies = src.map(c => ({
+      ...c, id: uid('clip'), name: `${c.name} copy`,
+      start: Math.max(0, Math.min(stepCount - c.length, anchor + (c.start - minStart))),
+      notes: c.notes.map(n => ({ ...n, id: uid('note') }))
+    }));
+    setClips(previous => [...previous, ...copies]);
+    setSelectedClipId(copies[copies.length - 1].id);
+    setMarkedIds(copies.map(c => c.id));
+  };
+
+  const pasteClipboard = () => {
+    if (noteClipboard.current.length > 0) pasteNotes();
+    else if (clipClipboard.current.length > 0) pasteClips();
+  };
+
+  const selectAll = () => {
+    if (activePaneRef.current === 'roll' && selectedClipIdRef.current) {
+      const clip = clipsRef.current.find(c => c.id === selectedClipIdRef.current);
+      if (clip) { setNoteSelection(clip.notes.map(n => n.id)); return; }
+    }
+    const ids = clipsRef.current.map(c => c.id);
+    setMarkedIds(ids);
+    if (!selectedClipIdRef.current && ids[0]) setSelectedClipId(ids[0]);
   };
 
   const setSelectedNoteVelocity = (velocity: number) => {
-    if (!selectedClip || !selectedNote) return;
+    if (!selectedClip || markedNoteIds.length === 0) return;
+    const clamped = Math.max(1, Math.min(127, velocity));
+    const ids = new Set(markedNoteIds);
     updateClip(selectedClip.id, {
-      notes: selectedClip.notes.map(note =>
-        note.id === selectedNote.id ? { ...note, velocity: Math.max(1, Math.min(127, velocity)) } : note
-      )
+      notes: selectedClip.notes.map(note => ids.has(note.id) ? { ...note, velocity: clamped } : note)
     });
   };
 
   const deleteSelectedNote = () => {
-    if (!selectedClip || !selectedNote) return;
-    updateClip(selectedClip.id, { notes: selectedClip.notes.filter(note => note.id !== selectedNote.id) });
-    setSelectedNoteId(null);
+    if (!selectedClip || markedNoteIds.length === 0) return;
+    const ids = new Set(markedNoteIds);
+    updateClip(selectedClip.id, { notes: selectedClip.notes.filter(note => !ids.has(note.id)) });
+    setNoteSelection([]);
   };
 
   // Drag a note to move it (time + pitch) or drag its right handle to change
   // how long it is held. Snaps to single steps / semitones; Alt+click deletes;
-  // a plain click selects it and a second plain click removes it.
+  // Shift/Ctrl+click adds to the mark. Dragging a marked note moves the whole
+  // marked set together. A plain click on the only selected note removes it.
   const onNotePointerDown = (e: React.PointerEvent, note: ClipNote, mode: 'move' | 'resize') => {
     if (e.button !== undefined && e.button !== 0) return;
     if (!selectedClip) return;
     e.preventDefault();
     e.stopPropagation();
+    activePaneRef.current = 'roll';
     const clipId = selectedClip.id;
     const len = selectedClip.length;
-    const wasSelected = selectedNoteId === note.id;
     if (e.altKey) {
-      removeNote(clipId, note.id);
+      if (markedNoteIds.includes(note.id) && markedNoteIds.length > 1) {
+        const gone = new Set(markedNoteIds);
+        updateClip(clipId, { notes: selectedClip.notes.filter(n => !gone.has(n.id)) });
+        setNoteSelection([]);
+      } else {
+        removeNote(clipId, note.id);
+      }
       return;
     }
-    setSelectedNoteId(note.id);
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      const next = markedNoteIds.includes(note.id)
+        ? markedNoteIds.filter(id => id !== note.id)
+        : [...markedNoteIds, note.id];
+      setNoteSelection(next);
+      return; // modifier-click marks; it never starts a drag
+    }
+    const movingAll = markedNoteIds.includes(note.id) && markedNoteIds.length > 1;
+    const movingIds = movingAll ? markedNoteIds.slice() : [note.id];
+    if (!movingAll) setNoteSelection([note.id]);
     const sx = e.clientX;
     const sy = e.clientY;
-    const orig = { pitch: note.pitch, start: note.start, duration: note.duration };
+    const origins = new Map(selectedClip.notes
+      .filter(n => movingIds.includes(n.id))
+      .map(n => [n.id, { pitch: n.pitch, start: n.start, duration: n.duration }]));
     let moved = false;
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - sx;
@@ -270,26 +385,34 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
       if (!moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
       moved = true;
       if (mode === 'resize') {
-        const duration = Math.max(1, Math.min(len - orig.start, orig.duration + Math.round(dx / 28)));
+        const origin = origins.get(note.id) ?? { pitch: note.pitch, start: note.start, duration: note.duration };
+        const duration = Math.max(1, Math.min(len - origin.start, origin.duration + Math.round(dx / 28)));
         patchNote(clipId, note.id, { duration });
         return;
       }
-      const start = Math.max(0, Math.min(len - orig.duration, orig.start + Math.round(dx / 28)));
-      const pitch = Math.max(PITCH_LOW, Math.min(PITCH_HIGH, orig.pitch - Math.round(dy / 24)));
-      // Don't let a drag land exactly on another note (that key is taken).
+      const dStep = Math.round(dx / 28);
+      const dRow = Math.round(dy / 24);
       setClips(previous => previous.map(clip => {
         if (clip.id !== clipId) return clip;
-        if (clip.notes.some(n => n.id !== note.id && n.pitch === pitch && n.start === start)) return clip;
-        return { ...clip, notes: clip.notes.map(n => n.id === note.id ? { ...n, start, pitch } : n) };
+        const nextNotes = clip.notes.map(n => {
+          const origin = origins.get(n.id);
+          if (!origin) return n;
+          const start = Math.max(0, Math.min(len - origin.duration, origin.start + dStep));
+          const pitch = Math.max(PITCH_LOW, Math.min(PITCH_HIGH, origin.pitch - dRow));
+          return { ...n, start, pitch };
+        });
+        // Refuse a landing that would double up a key on the same step.
+        const moving = new Set(movingIds);
+        const landed = nextNotes.filter(n => moving.has(n.id));
+        const clash = landed.some(n => nextNotes.some(o => o.id !== n.id && !moving.has(o.id) && o.pitch === n.pitch && o.start === n.start))
+          || new Set(landed.map(n => `${n.pitch}:${n.start}`)).size !== landed.length;
+        return clash ? clip : { ...clip, notes: nextNotes };
       }));
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', cancel);
-      if (!moved && mode === 'move' && wasSelected) {
-        removeNote(clipId, note.id);
-      }
     };
     const cancel = () => {
       window.removeEventListener('pointermove', move);
@@ -312,6 +435,123 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
       ? { ...clip, notes: clip.notes.filter(note => note.id !== noteId) }
       : clip));
     setSelectedNoteId(current => (current === noteId ? null : current));
+    setMarkedNoteIds(current => current.filter(id => id !== noteId));
+  };
+
+  const createNote = (pitch: number, step: number) => {
+    if (!selectedClip) return;
+    const note: ClipNote = {
+      id: uid('note'), pitch, start: step,
+      duration: Math.max(1, Math.min(noteLength, selectedClip.length - step)), velocity: 100
+    };
+    updateClip(selectedClip.id, { notes: [...selectedClip.notes, note] });
+    setNoteSelection([note.id]);
+  };
+
+  // Dragging on empty cells draws a note whose length follows the drag (like
+  // drag-painting a block). A press that never moves draws nothing — a plain
+  // click only clears the mark, and a double-click drops a note instead.
+  const startNoteDraw = (e: React.PointerEvent, pitch: number, step: number) => {
+    if (!selectedClip) return;
+    e.preventDefault();
+    e.stopPropagation();
+    activePaneRef.current = 'roll';
+    const clipId = selectedClip.id;
+    const len = selectedClip.length;
+    const anchor = step;
+    const sx = e.clientX;
+    let noteId: string | null = null;
+    const move = (ev: PointerEvent) => {
+      if (!noteId && Math.abs(ev.clientX - sx) < 4) return;
+      if (!noteId) {
+        const note: ClipNote = {
+          id: uid('note'), pitch, start: anchor,
+          duration: Math.max(1, Math.min(noteLength, len - anchor)), velocity: 100
+        };
+        noteId = note.id;
+        setClips(previous => previous.map(c => c.id === clipId ? { ...c, notes: [...c.notes, note] } : c));
+        setNoteSelection([note.id]);
+      }
+      const other = Math.max(0, Math.min(len - 1, anchor + Math.round((ev.clientX - sx) / 28)));
+      patchNote(clipId, noteId, { start: Math.min(anchor, other), duration: Math.abs(other - anchor) + 1 });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      if (!noteId) setNoteSelection([]);
+    };
+    const cancel = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  };
+
+  // Shift-drag on empty cells paints a marquee that marks every note it covers.
+  const startNoteMarquee = (e: React.PointerEvent) => {
+    if (!selectedClip) return;
+    const grid = rollGridRef.current;
+    if (!grid) return;
+    e.preventDefault();
+    e.stopPropagation();
+    activePaneRef.current = 'roll';
+    const rect = grid.getBoundingClientRect();
+    const toCell = (clientX: number, clientY: number) => {
+      const step = Math.max(0, Math.min(selectedClip.length - 1, Math.floor((clientX - rect.left - 62) / 28)));
+      const row = Math.max(0, Math.min(PITCHES.length - 1, Math.floor((clientY - rect.top) / 24)));
+      return { step, pitch: PITCH_HIGH - row };
+    };
+    const a = toCell(e.clientX, e.clientY);
+    let b = a;
+    const box = () => ({
+      sLo: Math.min(a.step, b.step), sHi: Math.max(a.step, b.step),
+      pLo: Math.min(a.pitch, b.pitch), pHi: Math.max(a.pitch, b.pitch),
+    });
+    setNoteMarquee(box());
+    const move = (ev: PointerEvent) => {
+      b = toCell(ev.clientX, ev.clientY);
+      setNoteMarquee(box());
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      const region = box();
+      setNoteMarquee(null);
+      const ids = selectedClip.notes
+        .filter(n => n.pitch >= region.pLo && n.pitch <= region.pHi && n.start <= region.sHi && n.start + n.duration - 1 >= region.sLo)
+        .map(n => n.id);
+      setNoteSelection(ids);
+    };
+    const cancel = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      setNoteMarquee(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  };
+
+  // Empty-cell press: a covering note is handled as a note, Shift paints a
+  // marquee, anything else draws.
+  const onCellPointerDown = (e: React.PointerEvent, pitch: number, step: number) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    const covering = noteAtCell(pitch, step);
+    if (covering) {
+      onNotePointerDown(e, covering, 'move');
+      return;
+    }
+    if (e.shiftKey) {
+      startNoteMarquee(e);
+      return;
+    }
+    startNoteDraw(e, pitch, step);
   };
 
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -323,6 +563,9 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
   const ROLL_COL = 28;
   const [rollWin, setRollWin] = useState({ start: 0, end: 192 });
   const rollScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const rollGridRef = React.useRef<HTMLDivElement | null>(null);
+  // Live rectangle while dragging over empty cells to mark several notes.
+  const [noteMarquee, setNoteMarquee] = useState<{ sLo: number; sHi: number; pLo: number; pHi: number } | null>(null);
   const rollRafRef = React.useRef(0);
   React.useEffect(() => {
     setRollWin({ start: 0, end: 192 });
@@ -350,23 +593,45 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
     return map;
   }, [selectedClip]);
 
-  // Del / Backspace removes every marked block (never while typing in a field).
+  const markedNoteSet = React.useMemo(() => new Set(markedNoteIds), [markedNoteIds]);
+
+  // Note occupying a cell — exact start first, then any held note covering it.
+  const noteAtCell = (pitch: number, step: number) =>
+    selectedClip?.notes.find(n => n.pitch === pitch && n.start === step)
+    ?? selectedClip?.notes.find(n => n.pitch === pitch && n.start <= step && step < n.start + n.duration);
+
+  // Keyboard: Ctrl+C/V/X copy/paste/cut whatever is marked (notes when the
+  // piano roll is active, blocks otherwise), Ctrl+A marks all, Del removes.
+  // Never fires while typing in a field.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      const ids = markedRef.current.length > 0 ? markedRef.current : (selectedClipId ? [selectedClipId] : []);
-      if (ids.length === 0) return;
-      e.preventDefault();
-      const gone = new Set(ids);
-      setClips(previous => previous.filter(clip => !gone.has(clip.id)));
-      setSelectedClipId(null);
-      setMarkedIds([]);
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.shiftKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'c' || key === 'x') {
+          e.preventDefault();
+          copySelection();
+          if (key === 'x') deleteSelection();
+          return;
+        }
+        if (key === 'v') { e.preventDefault(); pasteClipboard(); return; }
+        if (key === 'a') { e.preventDefault(); selectAll(); return; }
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        deleteSelection();
+        return;
+      }
+      if (e.key === 'Escape') {
+        setNoteSelection([]);
+        setMarkedIds([]);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedClipId, setClips]);
+  }, [selectedClip, selectedNote, setClips, stepCount, playheadStepRef]);
 
   const stepFromClientX = (laneEl: HTMLElement, clientX: number) => {
     const rect = laneEl.getBoundingClientRect();
@@ -685,7 +950,7 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
   return (
     <section className="arrangement-workspace">
       <div className="arrangement-heading">
-        <div><strong>Song Timeline</strong><span>{bars} bars · {stepCount} steps · {clips.length} blocks · drag empty lane to paint · drag block edge to resize (grows = repeats content) · drag over blocks to mark them · drag the lane's bottom strip for damper-pedal sustain{markedIds.length > 1 ? ` · ${markedIds.length} marked` : ''}</span></div>
+        <div><strong>Song Timeline</strong><span>{bars} bars · {stepCount} steps · {clips.length} blocks · drag empty lane to paint · drag block edge to resize (grows = repeats content) · drag over blocks to mark them · Ctrl+C / Ctrl+V copy &amp; paste · drag the lane's bottom strip for damper-pedal sustain{markedIds.length > 1 ? ` · ${markedIds.length} marked` : ''}</span></div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <span className="arrangement-hint">Endless blocks — full songs welcome</span>
           {onExtend && (
@@ -698,7 +963,7 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
       </div>
 
       <div className="arrangement-scroll">
-        <div className="arrangement-canvas" style={{ width: timelineWidth }}>
+        <div className="arrangement-canvas" style={{ width: timelineWidth }} onPointerDownCapture={() => { activePaneRef.current = 'arrange'; }}>
           <div className="arrangement-ruler" style={{ gridTemplateColumns: `180px repeat(${bars}, 1fr)` }}>
             <div className="lane-label">INSTRUMENT</div>
             {Array.from({ length: bars }, (_, index) => (
@@ -807,7 +1072,7 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
       </div>
 
       {selectedClip && (
-        <div className="piano-roll-panel" data-ctx-track={selectedClip.trackId}>
+        <div className="piano-roll-panel" data-ctx-track={selectedClip.trackId} onPointerDownCapture={() => { activePaneRef.current = 'roll'; }}>
           <div className="piano-roll-toolbar">
             <div>
               <input value={selectedClip.name} onChange={event => updateClip(selectedClip.id, { name: event.target.value })} />
@@ -845,22 +1110,28 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
             <label>Draw <select value={noteLength} onChange={event => setNoteLength(Number(event.target.value))}>{[1, 2, 4, 8].map(length => <option key={length} value={length}>{length} step{length > 1 ? 's' : ''}</option>)}</select></label>
             {selectedNote && (
               <>
-                <label title="Velocity of the selected note (click a note to select, click again to delete)">
-                  Vel {selectedNote.velocity}
+                <label title="Velocity of the selected note(s) (click to select · Shift-click to add · click the only selected note again to delete)">
+                  Vel {selectedNote.velocity}{markedNoteIds.length > 1 ? ` (${markedNoteIds.length})` : ''}
                   <input type="range" min={1} max={127} value={selectedNote.velocity} onChange={event => setSelectedNoteVelocity(Number(event.target.value))} style={{ width: 80, accentColor: '#00e5ff' }} />
                 </label>
-                <button onClick={deleteSelectedNote} title="Delete the selected note"><Trash2 size={14} /></button>
+                <button onClick={deleteSelectedNote} title="Delete the selected note(s)"><Trash2 size={14} /></button>
               </>
             )}
             <button onClick={duplicateMarked} title={markedIds.length > 1 ? `Duplicate ${markedIds.length} marked blocks` : 'Duplicate this block'}><Copy size={14} /> Duplicate{markedIds.length > 1 ? ` (${markedIds.length})` : ''}</button>
+            <button
+              onClick={pasteClipboard}
+              disabled={!clipboardLabel}
+              title={clipboardLabel ? `Paste ${clipboardLabel} (Ctrl+V) at the playhead` : 'Copy something first (Ctrl+C)'}
+              style={clipboardLabel ? undefined : { opacity: 0.5, cursor: 'default' }}
+            >Paste{clipboardLabel ? ` (${clipboardLabel})` : ''}</button>
             {markedIds.length > 1 && (
               <button onClick={mergeMarked} title={`Merge ${markedIds.length} marked blocks into one`}>Merge ({markedIds.length})</button>
             )}
             <button onClick={() => splitClip(selectedClip)} title="Split this block into two endless blocks">Split</button>
             <button className="danger" onClick={deleteMarked} title={markedIds.length > 1 ? `Delete ${markedIds.length} marked blocks (Del)` : 'Delete this block (Del)'}><Trash2 size={14} /> Delete{markedIds.length > 1 ? ` (${markedIds.length})` : ''}</button>
           </div>
-          <div className="piano-roll-scroll" ref={rollScrollRef} onScroll={onRollScroll} title="Click an empty cell to draw a note · drag a note to move it · drag its right edge to hold it longer · click a selected note again (or Alt+click) to remove it">
-            <div className="piano-roll" style={{ gridTemplateColumns: `62px repeat(${selectedClip.length}, 28px)` }}>
+          <div className="piano-roll-scroll" ref={rollScrollRef} onScroll={onRollScroll} title="Double-click empty to add a note, or drag to paint a held note · click empty to clear the mark · Shift-drag to mark a region (Shift-click adds, Ctrl+A all) · drag a note to move it, its right edge to stretch it · Ctrl+C / Ctrl+V copy & paste · Alt+click removes">
+            <div className="piano-roll" ref={rollGridRef} style={{ gridTemplateColumns: `62px repeat(${selectedClip.length}, 28px)` }}>
               {(() => {
                 // Windowed columns: spacer columns keep the grid aligned while
                 // only the visible slice (+overscan) actually mounts cells.
@@ -873,8 +1144,8 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
                   ...Array.from({ length: winEnd - winStart }, (_, index) => {
                     const step = winStart + index;
                     const note = noteAt.get(`${pitch}:${step}`);
-                    const isSelected = !!note && note.id === selectedNoteId;
-                    return <button key={`${pitch}-${step}`} className={`piano-cell ${step % 4 === 0 ? 'beat' : ''} ${note ? 'has-note' : ''}`} onClick={() => { if (!note) toggleNote(pitch, step); }} title={note ? `${pitchName(pitch)} · step ${step + 1} · vel ${note.velocity}` : `${pitchName(pitch)} · step ${step + 1}`} style={isSelected ? { boxShadow: 'inset 0 0 0 2px #fff' } : undefined}>{note && (
+                    const isSelected = !!note && markedNoteSet.has(note.id);
+                    return <button key={`${pitch}-${step}`} className={`piano-cell ${step % 4 === 0 ? 'beat' : ''} ${note ? 'has-note' : ''}`} onPointerDown={e => onCellPointerDown(e, pitch, step)} onDoubleClick={e => { if (noteAtCell(pitch, step)) return; e.preventDefault(); createNote(pitch, step); }} title={note ? `${pitchName(pitch)} · step ${step + 1} · vel ${note.velocity}` : `${pitchName(pitch)} · step ${step + 1}`} style={isSelected ? { boxShadow: 'inset 0 0 0 2px #fff' } : undefined}>{note && (
                       <span
                         className={`note-bar${isSelected ? ' selected' : ''}`}
                         style={{ width: `${note.duration * 28 - 2}px`, opacity: 0.45 + 0.55 * (note.velocity / 127) }}
@@ -888,6 +1159,17 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
                   ...(winEnd < len ? [<div key={`padr-${pitch}`} style={{ gridColumn: `span ${len - winEnd}` }} />] : []),
                 ]);
               })()}
+              {noteMarquee && (
+                <div
+                  className="note-marquee"
+                  style={{
+                    left: 62 + noteMarquee.sLo * 28,
+                    top: (PITCH_HIGH - noteMarquee.pHi) * 24,
+                    width: (noteMarquee.sHi - noteMarquee.sLo + 1) * 28,
+                    height: (noteMarquee.pHi - noteMarquee.pLo + 1) * 24,
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

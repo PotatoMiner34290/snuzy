@@ -317,7 +317,7 @@ button:active {
 .piano-roll-toolbar button { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border: 1px solid #3c485c; border-radius: 4px; background: #283247; color: #dce4eb; cursor: pointer; }
 .piano-roll-toolbar button.danger { color: #ff8d8d; }
 .piano-roll-scroll { max-height: 390px; overflow: auto; scrollbar-color: #00a8bb #171c29; }
-.piano-roll { display: grid; width: max-content; min-width: 100%; }
+.piano-roll { display: grid; width: max-content; min-width: 100%; position: relative; }
 .piano-key { position: sticky; left: 0; z-index: 4; height: 24px; padding: 5px 7px; border-right: 1px solid #4a556c; border-bottom: 1px solid #333c4e; background: #dce2e7; color: #19202a; font-size: 9px; font-weight: 800; }
 .piano-key.black { background: #252c39; color: #d2d9e0; }
 .piano-cell { position: relative; height: 24px; padding: 0; border: 0; border-right: 1px solid #242c3c; border-bottom: 1px solid #242c3c; background: #151b28; cursor: crosshair; }
@@ -328,6 +328,7 @@ button:active {
 .note-bar.selected { box-shadow: 0 0 0 2px #fff, 0 0 8px #00d9ef88; }
 .note-bar .note-resize { position: absolute; top: 0; bottom: 0; right: 0; width: 8px; border-radius: 0 3px 3px 0; cursor: col-resize; touch-action: none; }
 .note-bar .note-resize:hover, .note-bar .note-resize:active { background: #ffffff66; }
+.note-marquee { position: absolute; z-index: 6; border: 1px solid #00d9ef; background: rgba(0,217,239,0.16); border-radius: 2px; pointer-events: none; }
 @media (max-width: 760px) { .arrangement-heading, .piano-roll-toolbar { align-items: flex-start; flex-wrap: wrap; } .arrangement-hint { display: none; } }
 
 /* Input range slider transition */

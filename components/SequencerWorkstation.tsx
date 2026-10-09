@@ -3783,7 +3783,7 @@ export default function SequencerWorkstation() {
       </div>
 
       {activeView === 'arrangement' ? (
-        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={updater => { pushHistory(); setArrangementClips(updater); }} sustain={trackSustain} setSustain={updater => { pushHistory(); setTrackSustain(updater); }} onExtend={extendTimeline} trackGmInstruments={trackGmInstruments} onSetClipInstrument={setClipInstrument} onSeekStep={seekToStep} />
+        <ArrangementView tracks={tracks} stepCount={stepCount} clips={arrangementClips} setClips={updater => { pushHistory(); setArrangementClips(updater); }} sustain={trackSustain} setSustain={updater => { pushHistory(); setTrackSustain(updater); }} onExtend={extendTimeline} trackGmInstruments={trackGmInstruments} onSetClipInstrument={setClipInstrument} onSeekStep={seekToStep} playheadStepRef={stepRef} />
       ) : <>
       <div className="timeline-toolbar">
         <div>
