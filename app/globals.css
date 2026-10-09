@@ -298,7 +298,8 @@ button:active {
 /* Damper-pedal strip: 10px at the lane's bottom edge. The container is
    click-through (the lane's own gestures get the empty area); region bars
    re-enable pointer events and sit above the clips. */
-.lane-sustain { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; z-index: 3; pointer-events: none; }
+.lane-sustain { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; z-index: 3; pointer-events: none; border-top: 1px dashed #33405a; background: linear-gradient(to top, #0b111c 0%, #0b111ccc 60%, transparent 100%); }
+.lane-sustain::before { content: 'PEDAL'; position: absolute; left: 5px; top: 1px; font-size: 7px; font-weight: 800; letter-spacing: 1px; color: #4f6787; pointer-events: none; }
 .sustain-region { position: absolute; top: 1px; bottom: 1px; min-width: 5px; border-radius: 3px; background: #00d9efd9; box-shadow: 0 0 6px #00d9ef55; cursor: grab; pointer-events: auto; touch-action: none; }
 .sustain-region:active { cursor: grabbing; }
 .sustain-region.endless { background: linear-gradient(90deg, #00d9ef 0%, #6ef4c5 92%); box-shadow: 0 0 8px #6ef4c566; }
