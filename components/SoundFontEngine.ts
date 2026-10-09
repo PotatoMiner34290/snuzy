@@ -94,8 +94,8 @@ export const GM_INSTRUMENTS: GMInstrument[] = [
   { id: 59,  name: 'Muted Trumpet',           cdnName: 'muted_trumpet',           category: 'Brass' },
   { id: 60,  name: 'French Horn',             cdnName: 'french_horn',             category: 'Brass' },
   { id: 61,  name: 'Brass Section',           cdnName: 'brass_section',           category: 'Brass' },
-  { id: 62,  name: 'Synth Brass 1',           cdnName: 'synthbrass_1',            category: 'Brass' },
-  { id: 63,  name: 'Synth Brass 2',           cdnName: 'synthbrass_2',            category: 'Brass' },
+  { id: 62,  name: 'Synth Brass 1',           cdnName: 'synth_brass_1',           category: 'Brass' },
+  { id: 63,  name: 'Synth Brass 2',           cdnName: 'synth_brass_2',           category: 'Brass' },
 
   // ── Reed (64-71) ──
   { id: 64,  name: 'Soprano Sax',             cdnName: 'soprano_sax',             category: 'Reed' },
