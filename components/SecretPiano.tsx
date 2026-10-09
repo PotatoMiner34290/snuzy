@@ -14,6 +14,9 @@ interface Props {
   tracks: TrackDef[];
   clips: InstrumentClip[];
   sustain: Record<string, SustainRegion[]>;
+  // Live latch of continuous-mode pedals (mutated in playback, read per
+  // frame — passed as a ref so the lamp never lags a render behind).
+  armedRef?: React.MutableRefObject<Record<string, boolean>>;
   stepCount: number;
   bpm: number;
   isPlaying: boolean;
@@ -58,7 +61,7 @@ const lowerBound = (arr: FlatNote[], v: number) => {
   return lo;
 };
 
-export default function SecretPiano({ tracks, clips, sustain, stepCount, bpm, isPlaying, stepRef, onTogglePlay, onExit, onSeekStep }: Props) {
+export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCount, bpm, isPlaying, stepRef, onTogglePlay, onExit, onSeekStep }: Props) {
   const [pos, setPos] = useState(() => stepRef.current);
   const lastRef = useRef({ step: stepRef.current, t: 0 });
   const anchorRef = useRef({ ok: false, sec: 0, step: 0, lastFix: 0 });
@@ -164,7 +167,13 @@ export default function SecretPiano({ tracks, clips, sustain, stepCount, bpm, is
   const nowStep = Math.floor(pos);
   const bar = Math.floor(nowStep / 16) + 1;
   const totalBars = Math.ceil(stepCount / 16);
-  const pedalDown = Object.values(sustain).some(regs => regs.some(r => nowStep >= r.down && nowStep < r.up));
+  // A region still holding at the song's end never lifts (endless sustain);
+  // a gap anywhere drops the pedal there. A continuous-mode track stays lit
+  // through the loop wrap — the region's own span sits behind the playhead.
+  const armed = armedRef?.current;
+  const pedalDown = (!!armed && Object.values(armed).some(Boolean))
+    || Object.values(sustain).some(regs =>
+      regs.some(r => nowStep >= r.down && (r.up < 0 || r.up >= stepCount || nowStep < r.up)));
 
   // Keys glow on onset + while sustained.
   const keyGlow = useMemo(() => {
@@ -174,9 +183,12 @@ export default function SecretPiano({ tracks, clips, sustain, stepCount, bpm, is
       if (glow[notes[i].pitch] === undefined) glow[notes[i].pitch] = { color: notes[i].color, soft: false };
     }
     Object.entries(sustain).forEach(([trackId, regs]) => {
+      const latched = !!armed?.[trackId];
       regs.forEach(r => {
-        if (!(nowStep >= r.down && nowStep < r.up)) return;
-        const s1 = lowerBound(notes, r.down);
+        const held = latched
+          || (nowStep >= r.down && (r.up < 0 || r.up >= stepCount || nowStep < r.up));
+        if (!held) return;
+        const s1 = lowerBound(notes, latched ? 0 : r.down);
         for (let i = s1; i < notes.length && notes[i].absStep <= nowStep; i++) {
           const n = notes[i];
           if (n.trackId !== trackId || glow[n.pitch] !== undefined) continue;
@@ -185,7 +197,7 @@ export default function SecretPiano({ tracks, clips, sustain, stepCount, bpm, is
       });
     });
     return glow;
-  }, [notes, nowStep, sustain]);
+  }, [notes, nowStep, sustain, armed, stepCount]);
 
   const rows = hi - lo + 1;
   const maxPage = Math.max(0, Math.ceil(stepCount / PAGE) - 1);

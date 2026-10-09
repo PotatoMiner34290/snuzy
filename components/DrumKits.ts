@@ -9,6 +9,16 @@ export const DRUM_KITS = [
   { id: 'acoustic', name: 'Acoustic Kit', base: 'https://tonejs.github.io/audio/drum-samples/acoustic-kit' },
   { id: 'kit8', name: '808 Electro', base: 'https://tonejs.github.io/audio/drum-samples/Kit8' },
   { id: 'cr78', name: 'Vintage CR78', base: 'https://tonejs.github.io/audio/drum-samples/CR78' },
+  { id: 'linn', name: 'LINN Drum', base: 'https://tonejs.github.io/audio/drum-samples/LINN' },
+  { id: 'techno', name: 'Techno Kit', base: 'https://tonejs.github.io/audio/drum-samples/Techno' },
+  { id: 'kpr77', name: 'KPR77', base: 'https://tonejs.github.io/audio/drum-samples/KPR77' },
+  { id: 'kit3', name: 'Kit3 Electro', base: 'https://tonejs.github.io/audio/drum-samples/Kit3' },
+  { id: 'r8', name: 'R8', base: 'https://tonejs.github.io/audio/drum-samples/R8' },
+  { id: 'stark', name: 'Stark', base: 'https://tonejs.github.io/audio/drum-samples/Stark' },
+  { id: 'fm4op', name: '4OP FM Drums', base: 'https://tonejs.github.io/audio/drum-samples/4OP-FM' },
+  { id: 'bongos', name: 'Bongos', base: 'https://tonejs.github.io/audio/drum-samples/Bongos' },
+  { id: 'cheeb1', name: 'Cheebacabra 1', base: 'https://tonejs.github.io/audio/drum-samples/TheCheebacabra1' },
+  { id: 'cheeb2', name: 'Cheebacabra 2', base: 'https://tonejs.github.io/audio/drum-samples/TheCheebacabra2' },
 ] as const;
 
 export type DrumKitId = (typeof DRUM_KITS)[number]['id'];

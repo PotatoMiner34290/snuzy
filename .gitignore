@@ -16,6 +16,8 @@ out/
 coverage/
 *.local
 next-env.d.ts
+*.tsbuildinfo
+test-tmp/
 
 # Logs
 logs

@@ -292,7 +292,22 @@ button:active {
 .instrument-clip strong, .instrument-clip small { overflow: hidden; width: 100%; white-space: nowrap; text-overflow: ellipsis; }
 .instrument-clip strong { font-size: 10px; }
 .instrument-clip small { font-size: 8px; opacity: .72; }
+.instrument-clip .clip-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 11px; display: block; cursor: col-resize; touch-action: none; border-radius: 0 4px 4px 0; background: linear-gradient(to right, transparent, rgba(0, 0, 0, .45)); opacity: .55; }
+.instrument-clip .clip-resize:hover, .instrument-clip .clip-resize:active { opacity: 1; background: rgba(0, 229, 255, .55); box-shadow: inset 0 0 0 1px #00e5ff; }
 .lane-add { position: absolute; right: 8px; top: 16px; display: flex; align-items: center; gap: 3px; padding: 4px 6px; border: 1px dashed #465268; border-radius: 4px; background: #161c29cc; color: #75849b; cursor: pointer; font-size: 9px; }
+/* Damper-pedal strip: 10px at the lane's bottom edge. The container is
+   click-through (the lane's own gestures get the empty area); region bars
+   re-enable pointer events and sit above the clips. */
+.lane-sustain { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; z-index: 3; pointer-events: none; }
+.sustain-region { position: absolute; top: 1px; bottom: 1px; min-width: 5px; border-radius: 3px; background: #00d9efd9; box-shadow: 0 0 6px #00d9ef55; cursor: grab; pointer-events: auto; touch-action: none; }
+.sustain-region:active { cursor: grabbing; }
+.sustain-region.endless { background: linear-gradient(90deg, #00d9ef 0%, #6ef4c5 92%); box-shadow: 0 0 8px #6ef4c566; }
+.sustain-region .sustain-edge { position: absolute; top: -1px; bottom: -1px; width: 7px; pointer-events: auto; touch-action: none; }
+.sustain-region .sustain-edge:hover { background: #ffffff55; border-radius: 3px; }
+.sustain-region .sustain-edge-start { left: -3px; cursor: col-resize; }
+.sustain-region .sustain-edge-end { right: -3px; cursor: col-resize; }
+.sustain-inf { position: absolute; right: 4px; top: -4px; font-size: 10px; font-weight: 800; line-height: 1; color: #06282e; pointer-events: none; }
+.sustain-ghost { background: #00e5ff66; border: 1px dashed #00e5ff; box-shadow: none; pointer-events: none; }
 .arrangement-playhead { position: absolute; z-index: 9; top: 30px; bottom: 0; left: 180px; width: 2px; pointer-events: none; background: #fff; box-shadow: 0 0 8px #fff; }
 .piano-roll-panel { border-top: 1px solid #344057; background: #111621; }
 .piano-roll-toolbar { display: flex; align-items: center; gap: 9px; padding: 9px 12px; background: #1b2230; color: #9ba8ba; font-size: 10px; }
@@ -308,7 +323,11 @@ button:active {
 .piano-cell { position: relative; height: 24px; padding: 0; border: 0; border-right: 1px solid #242c3c; border-bottom: 1px solid #242c3c; background: #151b28; cursor: crosshair; }
 .piano-cell.beat { border-left: 1px solid #455168; }
 .piano-cell:hover { z-index: 2; background: #26354b; transform: none; }
-.piano-cell.has-note > span { position: absolute; z-index: 3; inset: 3px auto 3px 1px; min-width: 24px; border-radius: 3px; background: linear-gradient(90deg, #00c9df, #6ef4c5); box-shadow: 0 0 6px #00d9ef55; pointer-events: none; }
+.piano-cell.has-note > span.note-bar { position: absolute; z-index: 3; inset: 3px auto 3px 1px; min-width: 24px; border-radius: 3px; background: linear-gradient(90deg, #00c9df, #6ef4c5); box-shadow: 0 0 6px #00d9ef55; pointer-events: auto; cursor: grab; touch-action: none; }
+.note-bar:active { cursor: grabbing; }
+.note-bar.selected { box-shadow: 0 0 0 2px #fff, 0 0 8px #00d9ef88; }
+.note-bar .note-resize { position: absolute; top: 0; bottom: 0; right: 0; width: 8px; border-radius: 0 3px 3px 0; cursor: col-resize; touch-action: none; }
+.note-bar .note-resize:hover, .note-bar .note-resize:active { background: #ffffff66; }
 @media (max-width: 760px) { .arrangement-heading, .piano-roll-toolbar { align-items: flex-start; flex-wrap: wrap; } .arrangement-hint { display: none; } }
 
 /* Input range slider transition */
