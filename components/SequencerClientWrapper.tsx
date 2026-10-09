@@ -29,11 +29,21 @@ const SequencerWorkstation = dynamic(
 
 export default function SequencerClientWrapper() {
   // Cache CDN samples + piano-AI model for instant repeat visits.
-  // Production only: localhost stays uncached so dev never serves stale files.
+  // Production (https) only: dev never registers a service worker, and it
+  // actively purges any worker/cache left behind by an older build so a stale
+  // bundle or cached asset can never be served on localhost.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (!('serviceWorker' in navigator)) return;
-    if (window.location.protocol !== 'https:') return;
+    if (window.location.protocol !== 'https:') {
+      navigator.serviceWorker.getRegistrations()
+        .then(regs => regs.forEach(r => r.unregister()))
+        .catch(() => {});
+      if (typeof caches !== 'undefined') {
+        caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {});
+      }
+      return;
+    }
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
   return <SequencerWorkstation />;
