@@ -327,6 +327,8 @@ button:active {
 .piano-cell.has-note > span.note-bar { position: absolute; z-index: 3; inset: 3px auto 3px 1px; min-width: 24px; border-radius: 3px; background: linear-gradient(90deg, #00c9df, #6ef4c5); box-shadow: 0 0 6px #00d9ef55; pointer-events: auto; cursor: grab; touch-action: none; }
 .note-bar:active { cursor: grabbing; }
 .note-bar.selected { box-shadow: 0 0 0 2px #fff, 0 0 8px #00d9ef88; }
+.note-bar.pedal { background: linear-gradient(90deg, #ffb300, #ffe082); box-shadow: 0 0 6px #ffb30066; }
+.note-bar .note-pedal { position: absolute; left: 1px; top: -1px; font-size: 11px; font-weight: 800; line-height: 1; color: #3a2600; pointer-events: none; }
 .note-bar .note-resize { position: absolute; top: 0; bottom: 0; right: 0; width: 8px; border-radius: 0 3px 3px 0; cursor: col-resize; touch-action: none; }
 .note-bar .note-resize:hover, .note-bar .note-resize:active { background: #ffffff66; }
 .note-marquee { position: absolute; z-index: 6; border: 1px solid #00d9ef; background: rgba(0,217,239,0.16); border-radius: 2px; pointer-events: none; }

@@ -12,6 +12,9 @@ export interface ClipNote {
   start: number;
   duration: number;
   velocity: number;
+  // Damper-pedal hold: right-click a note to flag it. Flagged notes ring for
+  // their full length (looped voice) instead of decaying like a one-shot.
+  pedal?: boolean;
 }
 
 export interface InstrumentClip {
@@ -1130,7 +1133,7 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
             <button onClick={() => splitClip(selectedClip)} title="Split this block into two endless blocks">Split</button>
             <button className="danger" onClick={deleteMarked} title={markedIds.length > 1 ? `Delete ${markedIds.length} marked blocks (Del)` : 'Delete this block (Del)'}><Trash2 size={14} /> Delete{markedIds.length > 1 ? ` (${markedIds.length})` : ''}</button>
           </div>
-          <div className="piano-roll-scroll" ref={rollScrollRef} onScroll={onRollScroll} title="Double-click empty to add a note, or drag to paint a held note · click empty to clear the mark · Shift-drag to mark a region (Shift-click adds, Ctrl+A all) · drag a note to move it, its right edge to stretch it · Ctrl+C / Ctrl+V copy & paste · Alt+click removes">
+          <div className="piano-roll-scroll" ref={rollScrollRef} onScroll={onRollScroll} title="Double-click empty to add a note, or drag to paint a held note · right-click a note to toggle damper-pedal hold (rings its full length) · click empty to clear the mark · Shift-drag to mark a region (Shift-click adds, Ctrl+A all) · drag a note to move it, its right edge to stretch it · Ctrl+C / Ctrl+V copy & paste · Alt+click removes">
             <div className="piano-roll" ref={rollGridRef} style={{ gridTemplateColumns: `62px repeat(${selectedClip.length}, 28px)` }}>
               {(() => {
                 // Windowed columns: spacer columns keep the grid aligned while
@@ -1147,11 +1150,13 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
                     const isSelected = !!note && markedNoteSet.has(note.id);
                     return <button key={`${pitch}-${step}`} className={`piano-cell ${step % 4 === 0 ? 'beat' : ''} ${note ? 'has-note' : ''}`} onPointerDown={e => onCellPointerDown(e, pitch, step)} onDoubleClick={e => { if (noteAtCell(pitch, step)) return; e.preventDefault(); createNote(pitch, step); }} title={note ? `${pitchName(pitch)} · step ${step + 1} · vel ${note.velocity}` : `${pitchName(pitch)} · step ${step + 1}`} style={isSelected ? { boxShadow: 'inset 0 0 0 2px #fff' } : undefined}>{note && (
                       <span
-                        className={`note-bar${isSelected ? ' selected' : ''}`}
+                        className={`note-bar${isSelected ? ' selected' : ''}${note.pedal ? ' pedal' : ''}`}
+                        data-note-id={note.id}
                         style={{ width: `${note.duration * 28 - 2}px`, opacity: 0.45 + 0.55 * (note.velocity / 127) }}
-                        title={`${pitchName(note.pitch)} · ${note.duration} step${note.duration > 1 ? 's' : ''} · vel ${note.velocity} · drag to move · drag right edge to resize · Alt+click deletes`}
+                        title={`${pitchName(note.pitch)} · ${note.duration} step${note.duration > 1 ? 's' : ''} · vel ${note.velocity}${note.pedal ? ' · pedal-hold (rings full length)' : ''} · right-click for pedal · drag to move · drag right edge to resize · Alt+click deletes`}
                         onPointerDown={e => onNotePointerDown(e, note, 'move')}
                       >
+                        {note.pedal && <span className="note-pedal">⌐</span>}
                         <span className="note-resize" onPointerDown={e => onNotePointerDown(e, note, 'resize')} />
                       </span>
                     )}</button>;

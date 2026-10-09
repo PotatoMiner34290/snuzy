@@ -1067,7 +1067,7 @@ export default function SequencerWorkstation() {
   const [boot, setBoot] = useState({ done: 0, total: 1, label: 'Starting audio engine…' });
   const [bootVisible, setBootVisible] = useState(true);
   const bootedRef = useRef(false);
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null; noteId: string | null } | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [secretPiano, setSecretPiano] = useState<boolean>(false);
   const [mp3Booth, setMp3Booth] = useState<boolean>(false);
@@ -1127,7 +1127,7 @@ export default function SequencerWorkstation() {
   // Playback index: absolute step → notes starting there. Rebuilding this
   // once per edit is far cheaper than every tick doing clip.notes.filter()
   // across all clips (O(all notes) of GC pressure per 16th note at 32k steps).
-  type StepNote = { trackId: string; pitch: number; velocity: number; duration: number; gmId?: number };
+  type StepNote = { trackId: string; pitch: number; velocity: number; duration: number; gmId?: number; pedal?: boolean };
   const notesByStep = React.useMemo(() => {
     const index = new Map<number, StepNote[]>();
     arrangementClips.forEach(clip => {
@@ -1137,7 +1137,7 @@ export default function SequencerWorkstation() {
         const s = clip.start + local;
         if (s < 0 || s >= stepCount) return;
         const bucket = index.get(s);
-        const note: StepNote = { trackId: clip.trackId, pitch: n.pitch, velocity: n.velocity, duration: n.duration, gmId: clip.gmId };
+        const note: StepNote = { trackId: clip.trackId, pitch: n.pitch, velocity: n.velocity, duration: n.duration, gmId: clip.gmId, pedal: n.pedal };
         if (bucket) bucket.push(note);
         else index.set(s, [note]);
       });
@@ -1569,6 +1569,39 @@ export default function SequencerWorkstation() {
 
   const releaseAllVoices = (time?: number) => {
     Object.keys(heldVoicesRef.current).forEach(id => releaseTrackVoices(id, time));
+  };
+
+  // Release only the held looping voice for one pitch — used by per-note
+  // pedal flags, where the note rings for its own length and then lifts
+  // instead of waiting for a pedal region to end.
+  const releaseTrackNote = (trackId: string, noteName: string, time?: number) => {
+    const voices = heldVoicesRef.current[trackId];
+    if (!voices || voices.length === 0) return;
+    const t = time !== undefined ? time : Tone.now();
+    for (let i = voices.length - 1; i >= 0; i--) {
+      const v = voices[i];
+      if (v.note !== noteName) continue;
+      try {
+        if (v.voice) {
+          v.voice.release(t);
+        } else if (v.sampler) {
+          v.sampler.triggerRelease(v.note, t);
+          const ledger = samplerVoicesRef.current.get(v.sampler);
+          if (ledger) samplerVoicesRef.current.set(v.sampler, ledger.filter(e => e.note !== v.note));
+        } else if (v.inst) {
+          v.inst.triggerRelease(v.note, t);
+        }
+      } catch {}
+      voices.splice(i, 1);
+    }
+    if (voices.length === 0) delete heldVoicesRef.current[trackId];
+  };
+
+  // Wall-clock release for a pedal-flagged note. setTimeout (not the transport)
+  // so it fires cleanly whether or not playback continues past that step.
+  const schedulePedalNoteRelease = (trackId: string, noteName: string, atTime: number) => {
+    const delayMs = Math.max(0, (atTime - Tone.now()) * 1000);
+    window.setTimeout(() => releaseTrackNote(trackId, noteName), delayMs);
   };
 
   const refreshStepColCache = () => {
@@ -2070,7 +2103,10 @@ export default function SequencerWorkstation() {
                 const hit = stepNotes[n];
                 if (hit.trackId !== track.id) continue;
                 const durSec = Math.max(0.05, hit.duration * stepDurSec);
-                fireTrackSound(track, midiNoteName(hit.pitch), time, hit.velocity / 127, durSec, hit.gmId, sustainDown);
+                const noteName = midiNoteName(hit.pitch);
+                const pedalHold = !!hit.pedal;
+                fireTrackSound(track, noteName, time, hit.velocity / 127, durSec, hit.gmId, sustainDown || pedalHold);
+                if (pedalHold && !sustainDown) schedulePedalNoteRelease(track.id, noteName, time + durSec);
                 firedReal = true;
               }
             }
@@ -2096,7 +2132,10 @@ export default function SequencerWorkstation() {
               const note = stepNotes[m];
               if (note.trackId !== trackId) continue;
               const durSec = Math.max(0.05, note.duration * stepDurSec);
-              fireTrackSound(track, midiNoteName(note.pitch), time, note.velocity / 127, durSec, note.gmId, sustainDown);
+              const noteName = midiNoteName(note.pitch);
+              const pedalHold = !!note.pedal;
+              fireTrackSound(track, noteName, time, note.velocity / 127, durSec, note.gmId, sustainDown || pedalHold);
+              if (pedalHold && !sustainDown) schedulePedalNoteRelease(trackId, noteName, time + durSec);
             }
           });
         }
@@ -2912,6 +2951,7 @@ export default function SequencerWorkstation() {
       const el = e.target as HTMLElement;
       // Leave text-field editing alone.
       if (el.closest?.('.piano-roll-toolbar')) return;
+      const noteEl = el.closest?.('[data-note-id]');
       const clipEl = el.closest?.('[data-ctx-clip]');
       const trackEl = el.closest?.('[data-ctx-track]');
       setCtxMenu({
@@ -2919,6 +2959,7 @@ export default function SequencerWorkstation() {
         y: e.clientY,
         trackId: trackEl ? trackEl.getAttribute('data-ctx-track') : null,
         clipId: clipEl ? clipEl.getAttribute('data-ctx-clip') : null,
+        noteId: noteEl ? noteEl.getAttribute('data-note-id') : null,
       });
     };
     window.addEventListener('contextmenu', onCtx);
@@ -3475,6 +3516,38 @@ export default function SequencerWorkstation() {
 
   const ctxTrack = ctxMenu?.trackId ? tracks.find(t => t.id === ctxMenu.trackId) ?? null : null;
   const ctxClip = ctxMenu?.clipId ? arrangementClips.find(c => c.id === ctxMenu.clipId) ?? null : null;
+  const ctxNote = ctxMenu?.noteId
+    ? (() => {
+        for (const c of arrangementClips) {
+          const n = c.notes.find(nn => nn.id === ctxMenu.noteId);
+          if (n) return { clip: c, note: n };
+        }
+        return null;
+      })()
+    : null;
+  const toggleNotePedal = (clipId: string, noteId: string) => {
+    pushHistory();
+    setArrangementClips(prev => prev.map(c => c.id !== clipId ? c : {
+      ...c,
+      notes: c.notes.map(n => n.id === noteId ? { ...n, pedal: !n.pedal } : n),
+    }));
+  };
+  const buildNoteMenu = (): CtxItem[] => {
+    if (!ctxNote) return [];
+    const { clip, note } = ctxNote;
+    const on = !!note.pedal;
+    return [
+      { label: `Note: ${midiNoteName(note.pitch)} · step ${note.start + 1}`, header: true },
+      {
+        label: on ? 'Damper pedal: ON (rings)' : 'Damper pedal: off',
+        hint: on ? '✓' : '',
+        checked: on,
+        onClick: () => { toggleNotePedal(clip.id, note.id); setCtxMenu(null); },
+      },
+      { label: on ? '⇢ Right-click again to remove the hold' : '⇢ Long notes ring for their full length', disabled: true },
+      { separator: true, label: '' },
+    ];
+  };
   const buildBlockMenu = (): CtxItem[] => {
     if (!ctxClip) return [];
     const trackDefault = trackGmInstruments[ctxClip.trackId] ?? 0;
@@ -4050,7 +4123,7 @@ export default function SequencerWorkstation() {
         <ContextMenu
           x={ctxMenu.x}
           y={ctxMenu.y}
-          items={ctxTrack ? [...buildBlockMenu(), ...buildTrackMenu(ctxTrack)] : buildGlobalMenu()}
+          items={ctxNote ? [...buildNoteMenu(), ...(ctxTrack ? buildTrackMenu(ctxTrack) : [])] : ctxTrack ? [...buildBlockMenu(), ...buildTrackMenu(ctxTrack)] : buildGlobalMenu()}
           onClose={() => setCtxMenu(null)}
         />
       )}
