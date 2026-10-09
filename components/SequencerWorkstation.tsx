@@ -1010,6 +1010,32 @@ function loadAutosave(): AutosavedSong | null {
   }
 }
 
+// Keycap chip used by the tour's shortcut cheat sheet.
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd style={{
+      display: 'inline-block', padding: '1px 5px', margin: '0 1px',
+      border: '1px solid #3f4b60', borderBottomWidth: 2, borderRadius: 4,
+      background: '#222a3b', color: '#e3ecf2', fontFamily: 'inherit',
+      fontSize: 11, fontWeight: 700, lineHeight: 1.4,
+    }}>{children}</kbd>
+  );
+}
+
+const TOUR_SHORTCUTS: { keys: string[]; label: string }[] = [
+  { keys: ['Ctrl', 'Z'], label: 'Undo (one step per gesture)' },
+  { keys: ['Ctrl', 'Y'], label: 'Redo (Ctrl+Shift+Z also works)' },
+  { keys: ['Ctrl', 'C'], label: 'Copy marked notes / blocks' },
+  { keys: ['Ctrl', 'X'], label: 'Cut marked notes / blocks' },
+  { keys: ['Ctrl', 'V'], label: 'Paste at the playhead' },
+  { keys: ['Ctrl', 'A'], label: 'Mark all notes (piano roll) or all blocks' },
+  { keys: ['Del'], label: 'Delete marked notes / blocks (Backspace too)' },
+  { keys: ['Alt', 'click'], label: 'Delete one note, block, or pedal bar' },
+  { keys: ['Shift', 'click'], label: 'Add/remove from the mark' },
+  { keys: ['Shift', 'drag'], label: 'Mark a range of notes / blocks' },
+  { keys: ['Esc'], label: 'Clear the mark · close menus and this tour' },
+];
+
 export default function SequencerWorkstation() {
   // Session restore: an autosaved song opens instantly (no re-parse);
   // otherwise the baked showcase song is the starting state.
@@ -3441,7 +3467,7 @@ export default function SequencerWorkstation() {
   const TOUR_STEPS: TourStep[] = [
     {
       title: 'Welcome to SNUZY',
-      body: <>Your song is already loaded — press <b>PLAY</b> and it starts playing. This tour covers everything in about two minutes: transport, blocks, both editors, mixing, and the hidden rooms. Use ← → keys, Esc to leave anytime.</>,
+      body: <>Your song is already loaded — press <b>PLAY</b> and it starts playing. This tour covers the transport, blocks, both editors, mixing, and the hidden rooms. Move with <Kbd>←</Kbd> <Kbd>→</Kbd>, leave anytime with <Kbd>Esc</Kbd>. The last page is a full <b>keyboard-shortcut cheat sheet</b>.</>,
       view: 'arrangement',
     },
     {
@@ -3452,13 +3478,13 @@ export default function SequencerWorkstation() {
     },
     {
       title: 'The song is blocks',
-      body: <>Every block is an instrument pattern on a full-song timeline. <b>Drag</b> a block to move it — even onto another instrument's lane. <b>Drag across empty lane</b> to paint a new block at any length, <b>double-click</b> for a quick 1-bar block, click to select, <b>Del</b> removes it. +4/+16 bars extend the timeline endlessly.</>,
+      body: <>Every block is an instrument pattern on a full-song timeline. <b>Drag</b> a block to move it — even onto another lane. <b>Drag across empty lane</b> to paint one, <b>double-click</b> for a quick 1-bar block. <b>Click</b> to select, <b>Shift-click</b> to add to the mark, <b>drag over blocks</b> to mark a range. Then <Kbd>Ctrl</Kbd>+<Kbd>A</Kbd> marks all, <Kbd>Ctrl</Kbd>+<Kbd>C</Kbd> / <Kbd>V</Kbd> copy &amp; paste, <Kbd>Del</Kbd> deletes the marked ones, and <Kbd>Alt</Kbd>+click kills just one. Drag a block's right edge to resize it (grows = repeats the pattern). +4/+16 bars extend the timeline endlessly.</>,
       target: () => document.querySelector<HTMLElement>('.arrangement-scroll'),
       view: 'arrangement',
     },
     {
       title: 'Each block has its own sound',
-      body: <>Click a block to open its piano roll: draw notes, click a note to select it and drag <b>Vel</b>, and pick a <b>Block sound</b> so one block can be a trumpet while its lane stays piano. Start/Length reshape the block, Split divides it, Duplicate clones it. ✦ marks custom-sound blocks.</>,
+      body: <>Click a block to open its piano roll. <b>Double-click empty</b> to add a note, <b>drag</b> to paint a held note, <b>drag a note</b> to move it, its right edge to stretch it. <b>Shift-drag</b> marks a range, <Kbd>Ctrl</Kbd>+<Kbd>A</Kbd> marks all, <Kbd>Ctrl</Kbd>+<Kbd>C</Kbd> / <Kbd>V</Kbd> copy &amp; paste, <Kbd>Del</Kbd> removes the marked, <Kbd>Alt</Kbd>+click removes one — and <b>right-click</b> a note toggles damper-pedal hold so it rings its full length. Set <b>Vel</b>, pick a <b>Block sound</b> (one block can be a trumpet while its lane stays piano), or use Start/Length, Split &amp; Duplicate.</>,
       target: () => document.querySelector<HTMLElement>('.piano-roll-toolbar'),
       view: 'arrangement',
     },
@@ -3476,13 +3502,13 @@ export default function SequencerWorkstation() {
     },
     {
       title: 'Channels, history, everything',
-      body: <>Up top: <b>+ Add Channel</b> (blank or from the instrument library), <b>Arm/Disarm All</b>, <b>Clear Pattern</b>, <b>↩ Undo / ↪ Redo</b> (or Ctrl+Z / Ctrl+Y — one step per gesture), and <b>Set all to</b>, which recasts every channel to one instrument in a click.</>,
+      body: <>Up top: <b>+ Add Channel</b> (blank or from the instrument library), <b>Arm/Disarm All</b>, <b>Clear Pattern</b>, <b>↩ Undo / ↪ Redo</b> — or just <Kbd>Ctrl</Kbd>+<Kbd>Z</Kbd> / <Kbd>Ctrl</Kbd>+<Kbd>Y</Kbd> from anywhere (one step per gesture) — and <b>Set all to</b>, which recasts every channel to one instrument in a click.</>,
       target: () => document.querySelector<HTMLElement>('.channel-toolbar'),
       view: 'steps',
     },
     {
       title: 'Right-click does everything',
-      body: <>Right-click any track, block, or empty space — even the page margins — for the full toolbox: preview, arm/mute/solo/hold, engine, all 128 instruments in family boxes, note, velocity, volume, pan, per-block sound, and <b>one-click whole-song instrument swaps</b>. Clicking the page background clears mutes and solos so everything plays. There is no browser menu anywhere — this is it.</>,
+      body: <>Right-click any track, block, or empty space — even the page margins — for the full toolbox: preview, arm/mute/solo/hold, engine, all 128 instruments in family boxes, note, velocity, volume, pan, per-block sound, and <b>one-click whole-song instrument swaps</b>. Right-click a <b>note</b> to toggle damper-pedal hold. Clicking the page background clears mutes and solos so everything plays. There is no browser menu anywhere — this is it.</>,
       view: 'steps',
     },
     {
@@ -3499,8 +3525,24 @@ export default function SequencerWorkstation() {
     },
     {
       title: 'Note sequencer (bottom left)',
-      body: <>The <b>?</b> button opens a note sequencer: the song streams sideways past a play line and each key lights up as it sounds. <b>← Back to studio</b> returns without stopping the music. That's everything — press Finish and make some noise.</>,
+      body: <>The <b>?</b> button opens a note sequencer: the song streams sideways past a play line and each key lights up as it sounds. <b>← Back to studio</b> returns without stopping the music.</>,
       target: () => document.querySelector<HTMLElement>('#secret-piano-btn'),
+      view: 'steps',
+    },
+    {
+      title: 'Keyboard shortcuts',
+      body: (
+        <div style={{ display: 'grid', gap: 5 }}>
+          <div style={{ color: '#8aa0b4' }}>Everything you can do without the mouse:</div>
+          {TOUR_SHORTCUTS.map(s => (
+            <div key={s.label} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+              <span style={{ minWidth: 108, flexShrink: 0 }}>{s.keys.map((k, i) => <Kbd key={i}>{k}</Kbd>)}</span>
+              <span style={{ flex: 1 }}>{s.label}</span>
+            </div>
+          ))}
+          <div style={{ marginTop: 4, color: '#8aa0b4' }}><b>Mouse:</b> double-click = add note/block · right-click = toolboxes &amp; note pedal · Alt+click = delete · drag lane's bottom strip = pedal bar. That's everything — press <b>Finish</b> and make some noise.</div>
+        </div>
+      ),
       view: 'steps',
     },
   ];

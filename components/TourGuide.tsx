@@ -67,8 +67,8 @@ export default function TourGuide({ step, steps, onNext, onBack, onClose }: Prop
   const tipBelow = !rect || belowSpace > 260;
   const tipStyle: React.CSSProperties = rect
     ? tipBelow
-      ? { left: Math.max(12, Math.min(rect.left, window.innerWidth - 332)), top: rect.top + rect.height + 12 }
-      : { left: Math.max(12, Math.min(rect.left, window.innerWidth - 332)), top: Math.max(12, rect.top - 12), transform: 'translateY(-100%)' }
+      ? { left: Math.max(12, Math.min(rect.left, window.innerWidth - 372)), top: rect.top + rect.height + 12 }
+      : { left: Math.max(12, Math.min(rect.left, window.innerWidth - 372)), top: Math.max(12, rect.top - 12), transform: 'translateY(-100%)' }
     : { left: '50%', top: '50%', transform: 'translate(-50%, -50%)' };
 
   const last = step === steps.length - 1;
@@ -95,7 +95,7 @@ export default function TourGuide({ step, steps, onNext, onBack, onClose }: Prop
 
       <div
         style={{
-          position: 'fixed', zIndex: 11002, width: 320,
+          position: 'fixed', zIndex: 11002, width: 360, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto',
           background: '#171c29', border: '1px solid #00e5ff88', borderRadius: 12,
           boxShadow: '0 16px 48px #000d', padding: '16px 18px', color: '#dbe2e9',
           ...tipStyle,
