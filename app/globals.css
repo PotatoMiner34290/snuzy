@@ -317,7 +317,7 @@ button:active {
 .piano-roll-toolbar label { display: flex; align-items: center; gap: 4px; }
 .piano-roll-toolbar button { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border: 1px solid #3c485c; border-radius: 4px; background: #283247; color: #dce4eb; cursor: pointer; }
 .piano-roll-toolbar button.danger { color: #ff8d8d; }
-.piano-roll-scroll { max-height: 390px; overflow: auto; scrollbar-color: #00a8bb #171c29; }
+.piano-roll-scroll { max-height: min(52vh, 640px); overflow: auto; scrollbar-color: #00a8bb #171c29; }
 .piano-roll { display: grid; width: max-content; min-width: 100%; position: relative; }
 .piano-key { position: sticky; left: 0; z-index: 4; height: 24px; padding: 5px 7px; border-right: 1px solid #4a556c; border-bottom: 1px solid #333c4e; background: #dce2e7; color: #19202a; font-size: 9px; font-weight: 800; }
 .piano-key.black { background: #252c39; color: #d2d9e0; }

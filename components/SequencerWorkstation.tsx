@@ -1271,6 +1271,30 @@ export default function SequencerWorkstation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepCount]);
 
+  // Re-window when the viewport (or the grid container) resizes so a wider
+  // window renders more step columns instead of a fixed slice. The second
+  // frame pass settles after the grid has re-laid-out its columns.
+  useEffect(() => {
+    updateWinFromScroll();
+    const sc = gridScrollRef.current;
+    let ro: ResizeObserver | undefined;
+    if (sc && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => updateWinFromScroll());
+      ro.observe(sc);
+    }
+    const onResize = () => {
+      updateWinFromScroll();
+      if (winRafRef.current) cancelAnimationFrame(winRafRef.current);
+      winRafRef.current = requestAnimationFrame(() => { winRafRef.current = 0; updateWinFromScroll(); });
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, stepCount]);
+
   // Fresh cells render on every window change — rebuild the highlight cache
   // and repaint the live step so the playhead never goes dark mid-scroll.
   useEffect(() => {
@@ -3613,7 +3637,7 @@ export default function SequencerWorkstation() {
   };
 
   return (
-    <div ref={workspaceRef} style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 16px' }}>
+    <div ref={workspaceRef} style={{ maxWidth: '100%', margin: '0 auto', padding: '24px 16px' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 26, color: '#00e5ff', fontWeight: 800, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0 }}>

@@ -32,9 +32,9 @@ const pitchName = (pitch: number) => `${NOTE_NAMES[((pitch % 12) + 12) % 12]}${M
 
 // Horizontal piano-roll view (onlinesequencer style): the song stands
 // still on a gridded background while the playhead line travels across it,
-// paging forward every 64 steps. Notes sound exactly as the line touches
-// their left edge.
-const PAGE = 128;
+// paging forward every bar. The page width tracks the window (wider window =
+// more steps render), so it always fits without a fixed pixel width.
+const FALLBACK_PAGE = 128;
 const PX_PER_STEP = 14;
 const ROW_H = 16;
 const KEYS_W = 110;
@@ -75,6 +75,25 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
   React.useEffect(() => {
     try { localStorage.setItem(SYNC_KEY, String(syncMs)); } catch {}
   }, [syncMs]);
+
+  // Track the viewport width so the page renders as many steps as fit.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [viewW, setViewW] = useState(0);
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    const measure = () => setViewW(el ? el.clientWidth : window.innerWidth);
+    measure();
+    let ro: ResizeObserver | undefined;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      ro.observe(el);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
 
   // Same clock as before: smooth wall interpolation with slow audio trim,
   // display compensated by the calibrated sync offset.
@@ -200,11 +219,13 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
   }, [notes, nowStep, sustain, armed, stepCount]);
 
   const rows = hi - lo + 1;
-  const maxPage = Math.max(0, Math.ceil(stepCount / PAGE) - 1);
-  const page = Math.max(0, Math.min(maxPage, Math.floor(pos / PAGE)));
-  const winStart = page * PAGE;
-  const winEnd = winStart + PAGE;
-  const winW = KEYS_W + PAGE * PX_PER_STEP;
+  const usable = viewW > 0 ? viewW - KEYS_W : FALLBACK_PAGE * PX_PER_STEP;
+  const pageSteps = Math.max(16, Math.floor(usable / PX_PER_STEP / 16) * 16);
+  const maxPage = Math.max(0, Math.ceil(stepCount / pageSteps) - 1);
+  const page = Math.max(0, Math.min(maxPage, Math.floor(pos / pageSteps)));
+  const winStart = page * pageSteps;
+  const winEnd = winStart + pageSteps;
+  const winW = Math.max(KEYS_W + pageSteps * PX_PER_STEP, viewW);
   const playX = KEYS_W + (pos - winStart) * PX_PER_STEP;
 
   const startIdx = lowerBound(notes, winStart);
@@ -236,7 +257,7 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
   }
 
   const rulerBars = [];
-  for (let b = 0; b < PAGE / 16; b++) {
+  for (let b = 0; b < pageSteps / 16; b++) {
     const barNo = Math.floor(winStart / 16) + b + 1;
     const atStep = winStart + b * 16;
     if (atStep >= stepCount) break;
@@ -329,7 +350,7 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
         </span>
       </div>
 
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
         <div
           style={{
             position: 'relative',

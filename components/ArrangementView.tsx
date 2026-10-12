@@ -578,16 +578,41 @@ export default function ArrangementView({ tracks, stepCount, clips, setClips, su
     if (rollRafRef.current) return;
     rollRafRef.current = requestAnimationFrame(() => {
       rollRafRef.current = 0;
-      const el = rollScrollRef.current;
-      const clip = clipsRef.current.find(c => c.id === selectedClipId);
-      if (!el || !clip) return;
-      const first = Math.max(0, Math.floor((el.scrollLeft - 62) / ROLL_COL) - 64);
-      const count = Math.ceil(el.clientWidth / ROLL_COL) + 128;
-      const start = Math.floor(first / 32) * 32;
-      const end = Math.min(clip.length, Math.max(start + 32, Math.ceil((first + count) / 32) * 32));
-      setRollWin(prev => (prev.start === start && prev.end === end ? prev : { start, end }));
+      updateRollWin();
     });
   };
+  const updateRollWin = () => {
+    const el = rollScrollRef.current;
+    const clip = clipsRef.current.find(c => c.id === selectedClipIdRef.current);
+    if (!el || !clip) return;
+    const first = Math.max(0, Math.floor((el.scrollLeft - 62) / ROLL_COL) - 64);
+    const count = Math.ceil(el.clientWidth / ROLL_COL) + 128;
+    const start = Math.floor(first / 32) * 32;
+    const end = Math.min(clip.length, Math.max(start + 32, Math.ceil((first + count) / 32) * 32));
+    setRollWin(prev => (prev.start === start && prev.end === end ? prev : { start, end }));
+  };
+  // Re-window when the window (or the roll container) resizes so a wider
+  // viewport renders more columns instead of a fixed slice.
+  React.useEffect(() => {
+    updateRollWin();
+    const el = rollScrollRef.current;
+    let ro: ResizeObserver | undefined;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => updateRollWin());
+      ro.observe(el);
+    }
+    const onResize = () => {
+      updateRollWin();
+      if (rollRafRef.current) cancelAnimationFrame(rollRafRef.current);
+      rollRafRef.current = requestAnimationFrame(() => { rollRafRef.current = 0; updateRollWin(); });
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClipId]);
 
   // O(1) pitch:step lookup — a per-cell find() over tiled notes was O(cells×notes).
   const noteAt = React.useMemo(() => {
