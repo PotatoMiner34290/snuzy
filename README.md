@@ -24,6 +24,9 @@ Open [http://localhost:3000](http://localhost:3000).
 
 - [Tone.js](https://github.com/Tonejs/Tone.js) — Web Audio framework, synths, and effects
 - [@tonejs/midi](https://github.com/Tonejs/Midi) — MIDI file parsing
+- [Transkun](https://github.com/Yujia-Yan/Transkun) (Yujia Yan et al.) — piano transcription model
+- [transkun-onnx](https://huggingface.co/TuesdayCrowd/transkun-onnx) — in-browser model export
+- [onnxruntime](https://onnxruntime.ai) — local neural-network inference
 - [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts) — General MIDI instrument samples (FluidR3 GM)
 - [Tone.js audio samples](https://github.com/Tonejs/audio) — drum kits, Salamander grand piano, and Casio samples
 - [Next.js](https://nextjs.org), [React](https://react.dev), [Lucide](https://lucide.dev) icons

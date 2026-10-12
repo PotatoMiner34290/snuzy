@@ -2,6 +2,7 @@
 
 import React, { useRef, useState } from 'react';
 import { Midi } from '@tonejs/midi';
+import { loadTranskun, transcribeAudio, type TranskunModel } from './transkun/model';
 
 interface Props {
   bpm: number;
@@ -134,135 +135,84 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
   const rawRef = useRef<RawNote[]>([]);
   const [detectedBpm, setDetectedBpm] = useState(bpm);
   const analysingRef = useRef(false);
-  const magentaRef = useRef<{ model: unknown } | null>(null);
-  const magentaLoadingRef = useRef<Promise<void> | null>(null);
   const [aiPhase, setAiPhase] = useState<'idle' | 'loading' | 'ready' | 'working' | 'done' | 'error'>('idle');
   const [aiMsg, setAiMsg] = useState('');
+  // Transkun piano engine (lazy WASM session) + sustain pedal from its
+  // pedal track, carried into the project import as CC64.
+  const transkunRef = useRef<TranskunModel | null>(null);
+  const transkunLoadingRef = useRef<Promise<TranskunModel> | null>(null);
+  const pedalRef = useRef<Array<{ startSec: number; endSec: number }>>([]);
 
-  // Public piano-transcription stack (Magenta Onsets & Frames, trained on
-  // piano) loaded lazily from CDN — nothing added to the app bundle.
-  const TF_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js';
-  const MAGENTA_URL = 'https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/es6/transcription.js';
-  const PIANO_CKPT = 'https://storage.googleapis.com/magentadata/js/checkpoints/transcription/onsets_frames_uni_q2';
-
-  const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) {
-      resolve();
-      return;
-    }
-    const s = document.createElement('script');
-    s.src = src;
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`Failed to load ${src}`));
-    document.head.appendChild(s);
-  });
-
-  const ensurePianoAi = async () => {
-    if (magentaRef.current) return;
-    if (!magentaLoadingRef.current) {
-      magentaLoadingRef.current = (async () => {
+  // Transkun piano transcription (Yujia Yan et al., MIT) via its ONNX export
+  // (TuesdayCrowd/transkun-onnx, MIT), run locally with onnxruntime WASM.
+  // Nothing added to the app bundle — engine + weights lazy-load from CDN.
+  const ensureTranskun = async (): Promise<TranskunModel> => {
+    if (transkunRef.current) return transkunRef.current;
+    if (!transkunLoadingRef.current) {
+      transkunLoadingRef.current = (async () => {
         setAiPhase('loading');
-        setAiMsg('Downloading AI engine (~2MB, one time)…');
-        await loadScript(TF_URL);
-        await loadScript(MAGENTA_URL);
-        const g = window as unknown as Record<string, { OnsetsAndFrames: new (url: string) => {
-          initialize: () => Promise<void>;
-          isInitialized: () => boolean;
-          transcribeFromAudioBuffer: (buf: AudioBuffer) => Promise<{ notes?: { pitch: number; startTime: number; endTime: number; velocity: number }[] }>;
-        } } | undefined>;
-        const ns = g.transcription || g.onsets_frames || g.mm;
-        if (!ns?.OnsetsAndFrames) throw new Error('Piano AI library failed to initialise.');
-        setAiMsg('Downloading piano model (~30MB, one time)…');
-        const model = new ns.OnsetsAndFrames(PIANO_CKPT);
-        await model.initialize();
-        magentaRef.current = { model };
+        const model = await loadTranskun((pct, msg) => {
+          setProgress(pct);
+          setAiMsg(msg);
+        });
+        transkunRef.current = model;
         setAiPhase('ready');
         setAiMsg('');
+        return model;
       })().catch((err: unknown) => {
-        magentaLoadingRef.current = null;
+        transkunLoadingRef.current = null;
         throw err;
       });
     }
-    await magentaLoadingRef.current;
+    return transkunLoadingRef.current;
   };
 
-  const to16kMono = async (decoded: AudioBuffer): Promise<AudioBuffer> => {
-    const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
-    const mono = off.createBuffer(1, decoded.length, decoded.sampleRate);
-    const d = mono.getChannelData(0);
+  const to44100Mono = async (decoded: AudioBuffer): Promise<Float32Array> => {
     const ch0 = decoded.getChannelData(0);
     const ch1 = decoded.numberOfChannels > 1 ? decoded.getChannelData(1) : null;
-    for (let i = 0; i < decoded.length; i++) d[i] = ch1 ? (ch0[i] + ch1[i]) / 2 : ch0[i];
+    const mixed = new Float32Array(ch0.length);
+    for (let i = 0; i < ch0.length; i++) mixed[i] = ch1 ? (ch0[i] + ch1[i]) / 2 : ch0[i];
+    if (decoded.sampleRate === 44100) return mixed;
+    const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 44100)), 44100);
+    const buf = off.createBuffer(1, mixed.length, decoded.sampleRate);
+    buf.getChannelData(0).set(mixed);
     const src = off.createBufferSource();
-    src.buffer = mono;
+    src.buffer = buf;
     src.connect(off.destination);
     src.start();
-    return off.startRendering();
-  };
-
-  const sliceBuffer = (buf: AudioBuffer, startSec: number, lenSec: number): AudioBuffer => {
-    const sr = buf.sampleRate;
-    const start = Math.max(0, Math.floor(startSec * sr));
-    const len = Math.max(1, Math.min(Math.floor(lenSec * sr), buf.length - start));
-    const out = new OfflineAudioContext(1, len, sr).createBuffer(1, len, sr);
-    out.getChannelData(0).set(buf.getChannelData(0).subarray(start, start + len));
-    return out;
+    const rendered = await off.startRendering();
+    return rendered.getChannelData(0).slice();
   };
 
   const transcribePianoAi = async () => {
     const decoded = decodedRef.current;
     if (!decoded || aiPhase === 'working' || aiPhase === 'loading') return;
     setError('');
+    let model: TranskunModel;
     try {
-      await ensurePianoAi();
+      model = await ensureTranskun();
     } catch (err: unknown) {
       setAiPhase('error');
       setAiMsg(err instanceof Error ? err.message : 'Could not load the piano AI.');
-      return;
-    }
-    const holder = magentaRef.current as unknown as { model: {
-      transcribeFromAudioBuffer: (buf: AudioBuffer) => Promise<{ notes?: { pitch: number; startTime: number; endTime: number; velocity: number }[] }>;
-    } } | null;
-    if (!holder) {
-      setAiPhase('error');
-      setAiMsg('Piano AI library failed to initialise.');
       return;
     }
     setAiPhase('working');
     try {
       setAiMsg('Converting to piano format…');
       setProgress(2);
-      const buf16 = await to16kMono(decoded);
-      // 60s chunks with 2s overlap (memory safety on long pieces).
-      const CHUNK = 60;
-      const OVERLAP = 2;
-      const chunks: { buf: AudioBuffer; start: number }[] = [];
-      for (let s = 0; s < buf16.duration; s += CHUNK - OVERLAP) {
-        chunks.push({ buf: sliceBuffer(buf16, s, CHUNK), start: s });
-      }
-      const raw: RawNote[] = [];
-      let cutoff = 0;
-      for (let c = 0; c < chunks.length; c++) {
-        const { buf, start } = chunks[c];
-        setAiMsg(`Hearing piano… chunk ${c + 1}/${chunks.length}`);
-        const seq = await holder.model.transcribeFromAudioBuffer(buf);
-        (seq.notes || []).forEach(n => {
-          const t0 = start + n.startTime;
-          if (t0 < cutoff) return;
-          const vel = n.velocity > 1.5 ? n.velocity : n.velocity * 127;
-          raw.push({
-            pitch: Math.max(21, Math.min(108, Math.round(n.pitch))),
-            startSec: t0,
-            endSec: start + n.endTime,
-            velocity: Math.max(1, Math.min(127, Math.round(vel))),
-          });
-        });
-        cutoff = start + CHUNK;
-        setProgress(Math.round(((c + 1) / chunks.length) * 100));
-        await new Promise(res => setTimeout(res, 0));
-      }
+      const mono = await to44100Mono(decoded);
+      const result = await transcribeAudio(model, mono, (pct, msg) => {
+        setProgress(pct);
+        setAiMsg(msg);
+      });
+      const raw: RawNote[] = result.notes.map(n => ({
+        pitch: Math.max(21, Math.min(108, Math.round(n.pitch))),
+        startSec: n.start,
+        endSec: n.end,
+        velocity: Math.max(1, Math.min(127, Math.round(n.velocity))),
+      }));
       rawRef.current = raw;
+      pedalRef.current = result.pedal.map(p => ({ startSec: p.start, endSec: p.end }));
       const fit = fitTempo(raw);
       setDetectedBpm(fit.bpm);
       const merged = quantizeRaw(raw, fit.bpm, fit.shift);
@@ -291,6 +241,7 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
       try { ctx.close(); } catch {}
       decodedRef.current = decoded;
       rawRef.current = [];
+      pedalRef.current = [];
       setDetectedBpm(bpm);
       setAiPhase('idle');
       setAiMsg('');
@@ -385,6 +336,7 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
 
   const reAnalyse = () => {
     const m = monoRef.current;
+    pedalRef.current = [];
     if (m) analyse(m.data, m.sr, sensitivity);
   };
 
@@ -414,6 +366,17 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
           velocity: n.velocity / 127,
         });
       });
+      // Sustain pedal heard by the piano AI rides along as CC64, so the
+      // project's own parser turns it into pedal regions on import.
+      if (pedalRef.current.length > 0) {
+        const stepDur = 60 / useBpm / 4;
+        pedalRef.current.forEach(p => {
+          const down = Math.max(0, Math.round((p.startSec - fit.shift) / stepDur));
+          const up = Math.max(down + 1, Math.round((p.endSec - fit.shift) / stepDur));
+          track.addCC({ number: 64, value: 1, ticks: down * t16 });
+          track.addCC({ number: 64, value: 0, ticks: up * t16 });
+        });
+      }
       onImport(midi, `${track.name} (from MP3 @${useBpm} BPM)`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Import failed.');
@@ -435,8 +398,8 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
         <label
           style={{ display: 'block', marginTop: 16, padding: '12px 16px', borderRadius: 8, border: '1px dashed #465268', background: '#161c29', color: '#00e5ff', cursor: 'pointer', fontSize: 13, fontWeight: 700, textAlign: 'center' }}
         >
-          {fileName || 'Choose an MP3 / WAV / OGG file…'}
-          <input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onChange={e => pickFile(e.target.files?.[0] ?? undefined)} style={{ display: 'none' }} />
+          {fileName || 'Choose an audio or video file…'}
+          <input type="file" accept="audio/*,video/*,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov,.m4v" onChange={e => pickFile(e.target.files?.[0] ?? undefined)} style={{ display: 'none' }} />
         </label>
 
         {audioUrl && (
@@ -465,10 +428,10 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
             <button
               onClick={transcribePianoAi}
               disabled={!decodedRef.current || aiPhase === 'working' || aiPhase === 'loading'}
-              title="Magenta piano AI: full polyphonic transcription, best on piano recordings (downloads ~30MB model once, takes a while)"
+              title="Transkun piano AI: full polyphonic transcription with velocity and sustain pedal, best on piano recordings (downloads ~56MB model once, takes a while)"
               style={{ width: '100%', marginTop: 12, padding: '10px 14px', borderRadius: 8, border: '1px solid #651fff', background: '#1c1440', color: '#c4b5fd', cursor: decodedRef.current ? 'pointer' : 'default', fontSize: 13, fontWeight: 800, opacity: !decodedRef.current || aiPhase === 'working' || aiPhase === 'loading' ? 0.55 : 1 }}
             >
-              {aiPhase === 'working' ? 'Hearing piano…' : aiPhase === 'done' ? '↻ Re-run piano AI' : 'Piano AI transcribe (chords + all notes)'}
+              {aiPhase === 'working' ? 'Hearing piano…' : aiPhase === 'done' ? '↻ Re-run piano AI' : 'Piano AI transcribe (chords + pedal)'}
             </button>
             {(aiPhase === 'loading' || aiPhase === 'working') && (
               <div style={{ marginTop: 10 }}>

@@ -3342,7 +3342,51 @@ export default function SequencerWorkstation() {
       });
       // Dangling pedal (down with no lift in the file) sustains endlessly.
       if (pedalDown !== null) regions.push({ down: pedalDown, up: -1 });
-      if (regions.length > 0) nextSustain[id] = regions;
+      // Long held lines of the same pitch imply pedal even when the file
+      // carries no CC64. Transcription (MP3 import) especially fragments a
+      // sustained sound into short same-pitch blips, so bridge same-pitch
+      // notes separated by no more than a beat before measuring a span —
+      // then union any genuinely overlapping spans (merely touching spans
+      // stay separate, like the editor's own normalization).
+      const LONG_NOTE_PEDAL_STEPS = 16;
+      const SAME_NOTE_BRIDGE_STEPS = 4;
+      const byPitch = new Map<number, QuantNote[]>();
+      quantized.forEach(q => {
+        const list = byPitch.get(q.pitch);
+        if (list) list.push(q);
+        else byPitch.set(q.pitch, [q]);
+      });
+      byPitch.forEach(list => {
+        // `quantized` is start-ordered, so each per-pitch list is too.
+        let spanStart = -1;
+        let spanEnd = -1;
+        const flush = () => {
+          if (spanStart >= 0 && spanEnd - spanStart >= LONG_NOTE_PEDAL_STEPS) {
+            const down = Math.max(0, Math.min(importedStepCount - 1, spanStart));
+            regions.push({ down, up: Math.max(down + 1, Math.min(importedStepCount, spanEnd)) });
+          }
+        };
+        list.forEach(q => {
+          const end = q.globalStep + q.durationSteps;
+          if (spanStart < 0) { spanStart = q.globalStep; spanEnd = end; }
+          else if (q.globalStep <= spanEnd + SAME_NOTE_BRIDGE_STEPS) { spanEnd = Math.max(spanEnd, end); }
+          else { flush(); spanStart = q.globalStep; spanEnd = end; }
+        });
+        flush();
+      });
+      regions.sort((a, b) => a.down - b.down);
+      const mergedPedal: { down: number; up: number }[] = [];
+      regions.forEach(r => {
+        const last = mergedPedal[mergedPedal.length - 1];
+        const endOf = (s: { down: number; up: number }) => (s.up < 0 ? Infinity : s.up);
+        if (last && r.down < endOf(last)) {
+          const end = Math.max(endOf(last), endOf(r));
+          last.up = end === Infinity ? -1 : end;
+        } else {
+          mergedPedal.push({ down: r.down, up: r.up });
+        }
+      });
+      if (mergedPedal.length > 0) nextSustain[id] = mergedPedal;
 
       pushBlocks(id, trackName, quantized, i);
     });

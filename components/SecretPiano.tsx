@@ -237,15 +237,26 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
   const playX = KEYS_W + (pos - winStart) * PX_PER_STEP;
 
   const bars = useMemo(() => {
-    const startIdx = lowerBound(notes, winStart);
+    // Include long notes that started before the window but still ring into
+    // it — slicing by onset alone made them vanish on seek/page-turn. Scan
+    // back past any short notes sitting between the window and the overlap.
+    let startIdx = lowerBound(notes, winStart);
+    for (let i = startIdx - 1; i >= 0; i--) {
+      if (notes[i].absStep + notes[i].duration > winStart) startIdx = i;
+    }
     const out: React.ReactNode[] = [];
     for (let i = startIdx; i < notes.length; i++) {
       const n = notes[i];
       if (n.absStep >= winEnd) break;
+      if (n.absStep + n.duration <= winStart) continue;
       if (n.pitch < lo || n.pitch > hi) continue;
-      const x = KEYS_W + (n.absStep - winStart) * PX_PER_STEP;
+      // Clamp the left edge to the keys column so a carried-over note draws
+      // its visible tail instead of sliding underneath the keys.
+      const x0 = KEYS_W + (n.absStep - winStart) * PX_PER_STEP;
+      const x1 = KEYS_W + (n.absStep + n.duration - winStart) * PX_PER_STEP - 3;
+      const x = Math.max(KEYS_W, x0);
       const y = 24 + (hi - n.pitch) * ROW_H + 2;
-      const w = Math.max(8, n.duration * PX_PER_STEP - 3);
+      const w = Math.max(8, x1 - x);
       // Step-quantized glow: a note lights exactly on the step where it
       // sounds, so this layer only rebuilds when the step changes.
       const sounding = nowStep >= n.absStep && nowStep < n.absStep + n.duration;
