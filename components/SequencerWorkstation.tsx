@@ -1097,6 +1097,7 @@ export default function SequencerWorkstation() {
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [secretPiano, setSecretPiano] = useState<boolean>(false);
   const [mp3Booth, setMp3Booth] = useState<boolean>(false);
+  const [kitMenuOpen, setKitMenuOpen] = useState<boolean>(false);
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -2655,6 +2656,81 @@ export default function SequencerWorkstation() {
     showToast(`${kit.name} on ${ids.length} drum track${ids.length > 1 ? 's' : ''}`, 'DRUM KIT', '', 2500);
   };
 
+  // Group every channel by the instrument family it currently plays (a drum
+  // piece, or the GM category of its sound) so a whole family can be revoiced
+  // to one kit/sound at once. This generalizes "switch the drum kit" to any
+  // group, e.g. switch every piano channel to another piano.
+  const familyOf = (t: TrackDef): string => {
+    if (DRUM_PIECE_FILE[t.type] !== undefined) return 'Drums';
+    const gmId = trackGmInstruments[t.id] ?? defaultGmForTrack(t);
+    return GM_INSTRUMENTS[gmId]?.category ?? (premiumGmName(gmId) ? 'Premium Keys' : 'Other');
+  };
+  const kitGroups = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+    tracks.forEach(t => {
+      const family = familyOf(t);
+      const list = map.get(family);
+      if (list) list.push(t.id);
+      else map.set(family, [t.id]);
+    });
+    return Array.from(map.entries()).map(([family, ids]) => ({ family, ids }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks, trackGmInstruments]);
+
+  // Put a chosen drum kit on a specific set of channels.
+  const applyKitToTrackIds = async (ids: string[], kitId: DrumKitId) => {
+    const kit = DRUM_KITS.find(k => k.id === kitId);
+    if (!kit || ids.length === 0) return;
+    pushHistory();
+    const idSet = new Set(ids);
+    const nextKits = Object.fromEntries(ids.map(id => [id, kitId]));
+    trackDrumKitRef.current = { ...trackDrumKitRef.current, ...nextKits };
+    setTrackDrumKitState(prev => ({ ...prev, ...nextKits }));
+    setTrackEngine(prev => {
+      const next = { ...prev };
+      ids.forEach(id => { next[id] = 'synth'; });
+      return next;
+    });
+    ids.forEach(id => {
+      releaseTrackVoices(id);
+      disposeTrackSampler(id);
+      disposeTrackDrums(id);
+      ensureTrackChain(id);
+    });
+    tracksRef.current.filter(t => idSet.has(t.id)).forEach(t => {
+      ensureTrackSynth(t);
+      ensureTrackDrums({ ...t }).catch(() => {});
+    });
+    showToast(`${kit.name} on ${ids.length} channel${ids.length > 1 ? 's' : ''}`, 'KIT', '', 2200);
+  };
+
+  // Put a chosen instrument (GM / premium) on a specific set of channels,
+  // keeping their channel names.
+  const applyInstrumentToTracks = async (ids: string[], gmId: number) => {
+    if (ids.length === 0) return;
+    pushHistory();
+    setTrackEngine(prev => {
+      const next = { ...prev };
+      ids.forEach(id => { next[id] = 'soundfont'; });
+      return next;
+    });
+    setTrackGmInstruments(prev => {
+      const next = { ...prev };
+      ids.forEach(id => { next[id] = gmId; });
+      return next;
+    });
+    await loadSoundFontInstrument(gmId);
+    ids.forEach(id => {
+      releaseTrackVoices(id);
+      disposeTrackSynth(id);
+      disposeTrackDrums(id);
+      ensureTrackChain(id);
+    });
+    ids.forEach(id => { ensureTrackSamplerById(id, gmId).catch(() => {}); });
+    const name = GM_INSTRUMENTS[gmId]?.name ?? premiumGmName(gmId) ?? 'Instrument';
+    showToast(`${name} on ${ids.length} channel${ids.length > 1 ? 's' : ''}`, 'KIT', '', 2200);
+  };
+
   const applyInstrumentToAll = async (gmId: number) => {
     pushHistory();
     setApplyAllGm(gmId);
@@ -3909,6 +3985,14 @@ export default function SequencerWorkstation() {
               ))}
             </select>
           </label>
+          <button
+            onClick={() => setKitMenuOpen(true)}
+            className="btn-toolbar"
+            title="Group channels by instrument family and revoice a whole group at once"
+            style={{ padding: '6px 12px', background: '#1c2b33', color: '#4dd0e1', border: '1px solid #00796b', borderRadius: 4, cursor: 'pointer', fontWeight: 800 }}
+          >
+            🎛 Kits
+          </button>
         </div>
 
         <div className="file-toolbar" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -4265,6 +4349,81 @@ export default function SequencerWorkstation() {
           onExit={() => setSecretPiano(false)}
           onSeekStep={seekToStep}
         />
+      )}
+
+      {kitMenuOpen && (
+        <div
+          onClick={() => setKitMenuOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 10002, background: '#0009', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ width: 'min(580px, 100%)', maxHeight: '84vh', overflowY: 'auto', background: '#12161f', border: '1px solid #3b475d', borderRadius: 12, boxShadow: '0 24px 60px #000c', padding: 18, color: '#dbe2e9' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <h2 style={{ margin: 0, fontSize: 16, color: '#00e5ff', fontWeight: 800 }}>🎛 Kit Manager</h2>
+              <button
+                onClick={() => setKitMenuOpen(false)}
+                style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #3b475d', background: '#1b2030', color: '#cfd8dc', cursor: 'pointer', fontSize: 13, fontWeight: 800 }}
+              >
+                ✕
+              </button>
+            </div>
+            <p style={{ margin: '0 0 14px', fontSize: 11, color: '#78909c', lineHeight: 1.5 }}>
+              Channels are grouped by the instrument family they play. Choose a kit (drums) or a sound
+              (everything else) for a group and every channel in it switches at once.
+            </p>
+            {kitGroups.length === 0 && <div style={{ color: '#78909c', fontSize: 12 }}>No channels yet.</div>}
+            {(() => {
+              const trackById = new Map(tracks.map(t => [t.id, t]));
+              return kitGroups.map(({ family, ids }) => {
+                const isDrums = family === 'Drums';
+                const values = ids.map(id => isDrums
+                  ? (trackDrumKit[id] ?? DEFAULT_DRUM_KIT)
+                  : (trackGmInstruments[id] ?? defaultGmForTrack(trackById.get(id)!)));
+                const first = values[0];
+                const current = values.every(v => v === first) ? first : '';
+                return (
+                  <div key={family} style={{ marginBottom: 12, padding: 12, background: '#171c29', border: '1px solid #2c3547', borderRadius: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontWeight: 800, color: isDrums ? '#ffd000' : '#00e5ff', fontSize: 13 }}>{family}</span>
+                      <span style={{ fontSize: 10, color: '#78909c' }}>{ids.length} channel{ids.length > 1 ? 's' : ''}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                      {ids.map(id => (
+                        <span key={id} style={{ fontSize: 10, color: '#9ba8ba', border: '1px solid #3b475d', borderRadius: 999, padding: '2px 8px' }}>
+                          {trackById.get(id)?.name ?? id}
+                        </span>
+                      ))}
+                    </div>
+                    <select
+                      value={current === '' ? '' : String(current)}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === '') return;
+                        if (isDrums) applyKitToTrackIds(ids, v as DrumKitId);
+                        else applyInstrumentToTracks(ids, Number(v));
+                      }}
+                      style={{ ...selectStyle, width: '100%', fontSize: 12, padding: '6px 8px', color: isDrums ? '#ffd000' : '#f9a825' }}
+                      title={isDrums ? 'Drum kit for every channel in this group' : 'Sound for every channel in this group'}
+                    >
+                      {current === '' && <option value="">— mixed ({ids.length} channels) —</option>}
+                      {isDrums ? (
+                        DRUM_KITS.map(k => <option key={k.id} value={k.id}>{k.name}</option>)
+                      ) : (
+                        Object.entries(groupedGmInstruments).map(([cat, insts]) => (
+                          <optgroup key={cat} label={cat}>
+                            {insts.map(inst => <option key={inst.id} value={inst.id}>{inst.name}</option>)}
+                          </optgroup>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </div>
       )}
     </div>
   );
