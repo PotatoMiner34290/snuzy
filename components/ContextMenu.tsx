@@ -168,18 +168,12 @@ export default function ContextMenu({ x, y, items, onClose }: MenuProps) {
       if (t?.closest?.('.ctx-menu')) return;
       onClose();
     };
-    const onScroll = (e: Event) => {
-      if (e.target instanceof HTMLElement && e.target.closest('.ctx-menu')) return;
-      onClose();
-    };
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', onPointer);
-    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onClose);
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointer);
-      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onClose);
     };
   }, [onClose]);
