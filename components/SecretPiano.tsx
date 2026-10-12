@@ -64,6 +64,7 @@ const lowerBound = (arr: FlatNote[], v: number) => {
 export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCount, bpm, isPlaying, stepRef, onTogglePlay, onExit, onSeekStep }: Props) {
   const [pos, setPos] = useState(() => stepRef.current);
   const lastRef = useRef({ step: stepRef.current, t: 0 });
+  const posRef = useRef(stepRef.current);
   const anchorRef = useRef({ ok: false, sec: 0, step: 0, lastFix: 0 });
   const [syncMs, setSyncMs] = useState(() => {
     try {
@@ -141,7 +142,14 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
       } else {
         anchorRef.current.ok = false;
       }
-      setPos(Math.max(0, s + frac - (isPlaying ? compSteps : 0)));
+      const next = Math.max(0, s + frac - (isPlaying ? compSteps : 0));
+      // Skip no-op frames so a paused sequencer issues zero re-renders; the
+      // note/key layers below are memoized, so playing frames only move the
+      // playhead line instead of rebuilding every note.
+      if (Math.abs(next - posRef.current) >= 0.004) {
+        posRef.current = next;
+        setPos(next);
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -228,93 +236,104 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
   const winW = Math.max(KEYS_W + pageSteps * PX_PER_STEP, viewW);
   const playX = KEYS_W + (pos - winStart) * PX_PER_STEP;
 
-  const startIdx = lowerBound(notes, winStart);
-  const bars: React.ReactNode[] = [];
-  for (let i = startIdx; i < notes.length; i++) {
-    const n = notes[i];
-    if (n.absStep >= winEnd) break;
-    if (n.pitch < lo || n.pitch > hi) continue;
-    const x = KEYS_W + (n.absStep - winStart) * PX_PER_STEP;
-    const y = 24 + (hi - n.pitch) * ROW_H + 2;
-    const w = Math.max(8, n.duration * PX_PER_STEP - 3);
-    const sounding = pos >= n.absStep && pos < n.absStep + n.duration;
-    bars.push(
-      <div
-        key={n.key}
-        style={{
-          position: 'absolute',
-          left: x,
-          top: y,
-          width: w,
-          height: ROW_H - 4,
-          borderRadius: 3,
-          background: n.color,
-          opacity: sounding ? 1 : 0.85,
-          boxShadow: sounding ? `0 0 10px ${n.color}` : 'none',
-        }}
-      />
-    );
-  }
+  const bars = useMemo(() => {
+    const startIdx = lowerBound(notes, winStart);
+    const out: React.ReactNode[] = [];
+    for (let i = startIdx; i < notes.length; i++) {
+      const n = notes[i];
+      if (n.absStep >= winEnd) break;
+      if (n.pitch < lo || n.pitch > hi) continue;
+      const x = KEYS_W + (n.absStep - winStart) * PX_PER_STEP;
+      const y = 24 + (hi - n.pitch) * ROW_H + 2;
+      const w = Math.max(8, n.duration * PX_PER_STEP - 3);
+      // Step-quantized glow: a note lights exactly on the step where it
+      // sounds, so this layer only rebuilds when the step changes.
+      const sounding = nowStep >= n.absStep && nowStep < n.absStep + n.duration;
+      out.push(
+        <div
+          key={n.key}
+          style={{
+            position: 'absolute',
+            left: x,
+            top: y,
+            width: w,
+            height: ROW_H - 4,
+            borderRadius: 3,
+            background: n.color,
+            opacity: sounding ? 1 : 0.85,
+            boxShadow: sounding ? `0 0 10px ${n.color}` : 'none',
+          }}
+        />
+      );
+    }
+    return out;
+  }, [notes, winStart, winEnd, lo, hi, nowStep]);
 
-  const rulerBars = [];
-  for (let b = 0; b < pageSteps / 16; b++) {
-    const barNo = Math.floor(winStart / 16) + b + 1;
-    const atStep = winStart + b * 16;
-    if (atStep >= stepCount) break;
-    rulerBars.push(
-      <button
-        key={b}
-        onClick={() => onSeekStep?.(atStep)}
-        title={onSeekStep ? `Play from bar ${barNo}` : undefined}
-        style={{
-          position: 'absolute',
-          left: KEYS_W + b * 16 * PX_PER_STEP,
-          top: 0,
-          border: 'none',
-          background: 'transparent',
-          color: '#738096',
-          fontSize: 9,
-          fontWeight: 800,
-          cursor: onSeekStep ? 'pointer' : 'default',
-          padding: '5px 4px',
-        }}
-      >
-        BAR {barNo}
-      </button>
-    );
-  }
+  const rulerBars = useMemo(() => {
+    const out = [];
+    for (let b = 0; b < pageSteps / 16; b++) {
+      const barNo = Math.floor(winStart / 16) + b + 1;
+      const atStep = winStart + b * 16;
+      if (atStep >= stepCount) break;
+      out.push(
+        <button
+          key={b}
+          onClick={() => onSeekStep?.(atStep)}
+          title={onSeekStep ? `Play from bar ${barNo}` : undefined}
+          style={{
+            position: 'absolute',
+            left: KEYS_W + b * 16 * PX_PER_STEP,
+            top: 0,
+            border: 'none',
+            background: 'transparent',
+            color: '#738096',
+            fontSize: 9,
+            fontWeight: 800,
+            cursor: onSeekStep ? 'pointer' : 'default',
+            padding: '5px 4px',
+          }}
+        >
+          BAR {barNo}
+        </button>
+      );
+    }
+    return out;
+  }, [winStart, pageSteps, stepCount, onSeekStep]);
 
-  const keyRows = [];
-  for (let p = hi; p >= lo; p--) {
-    const black = isBlack(p);
-    const g = keyGlow[p];
-    keyRows.push(
-      <div
-        key={p}
-        title={pitchName(p)}
-        style={{
-          height: ROW_H,
-          display: 'flex',
-          alignItems: 'center',
-          background: g ? g.color : black ? '#141a26' : '#e8edf2',
-          borderBottom: '1px solid #2a3348',
-          borderRight: '1px solid #364055',
-          boxShadow: g && !g.soft ? `inset 0 0 12px #0008, 0 0 14px ${g.color}` : g ? `inset 0 0 0 2px ${g.color}` : 'none',
-          color: g ? '#000' : black ? '#d2d9e0' : '#607d8b',
-          fontSize: black ? 0 : 9,
-          paddingLeft: black ? 0 : 6,
-          fontWeight: 700,
-          overflow: 'hidden',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {black ? '' : pitchName(p)}
-      </div>
-    );
-  }
+  const keyRows = useMemo(() => {
+    const out = [];
+    for (let p = hi; p >= lo; p--) {
+      const black = isBlack(p);
+      const g = keyGlow[p];
+      out.push(
+        <div
+          key={p}
+          title={pitchName(p)}
+          style={{
+            height: ROW_H,
+            display: 'flex',
+            alignItems: 'center',
+            background: g ? g.color : black ? '#141a26' : '#e8edf2',
+            borderBottom: '1px solid #2a3348',
+            borderRight: '1px solid #364055',
+            boxShadow: g && !g.soft ? `inset 0 0 12px #0008, 0 0 14px ${g.color}` : g ? `inset 0 0 0 2px ${g.color}` : 'none',
+            color: g ? '#000' : black ? '#d2d9e0' : '#607d8b',
+            fontSize: black ? 0 : 9,
+            paddingLeft: black ? 0 : 6,
+            fontWeight: 700,
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {black ? '' : pitchName(p)}
+        </div>
+      );
+    }
+    return out;
+  }, [keyGlow, lo, hi]);
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: '#0b0e14', display: 'flex', flexDirection: 'column', color: '#dbe2e9' }}>
+    <div data-note-sequencer style={{ position: 'fixed', inset: 0, zIndex: 9000, background: '#0b0e14', display: 'flex', flexDirection: 'column', color: '#dbe2e9' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #242b3c', background: '#11151f', flexWrap: 'wrap' }}>
         <button
           onClick={onExit}

@@ -1093,11 +1093,12 @@ export default function SequencerWorkstation() {
   const [boot, setBoot] = useState({ done: 0, total: 1, label: 'Starting audio engine…' });
   const [bootVisible, setBootVisible] = useState(true);
   const bootedRef = useRef(false);
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null; noteId: string | null } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; trackId: string | null; clipId: string | null; noteId: string | null; piano: boolean } | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [secretPiano, setSecretPiano] = useState<boolean>(false);
   const [mp3Booth, setMp3Booth] = useState<boolean>(false);
   const [kitMenuOpen, setKitMenuOpen] = useState<boolean>(false);
+  const [kitMenuMode, setKitMenuMode] = useState<'groups' | 'tracks'>('groups');
 
   const [applyAllGm, setApplyAllGm] = useState<number>(0);
 
@@ -2626,36 +2627,6 @@ export default function SequencerWorkstation() {
     showToast(`${kit.name} on everything — lows kick, highs snap`, 'DRUM KIT', '', 3000);
   };
 
-  // Every drum track onto one sampled kit in a click.
-  const applyKitToDrums = async (kitId: DrumKitId) => {
-    const drumTracks = tracksRef.current.filter(t => DRUM_PIECE_FILE[t.type] !== undefined);
-    const kit = DRUM_KITS.find(k => k.id === kitId);
-    if (drumTracks.length === 0 || !kit) {
-      showToast('No drum tracks — add drums from the library first', 'DRUM KIT', '', 2500);
-      return;
-    }
-    pushHistory();
-    const ids = drumTracks.map(t => t.id);
-    const nextKits = Object.fromEntries(ids.map(id => [id, kitId]));
-    trackDrumKitRef.current = { ...trackDrumKitRef.current, ...nextKits };
-    setTrackDrumKitState(prev => ({ ...prev, ...nextKits }));
-    setTrackEngine(prev => {
-      const next = { ...prev };
-      ids.forEach(id => { next[id] = 'synth'; });
-      return next;
-    });
-    ids.forEach(id => {
-      disposeTrackSampler(id);
-      disposeTrackDrums(id);
-      ensureTrackChain(id);
-    });
-    drumTracks.forEach(t => {
-      ensureTrackSynth(t);
-      ensureTrackDrums({ ...t }).catch(() => {});
-    });
-    showToast(`${kit.name} on ${ids.length} drum track${ids.length > 1 ? 's' : ''}`, 'DRUM KIT', '', 2500);
-  };
-
   // Group every channel by the instrument family it currently plays (a drum
   // piece, or the GM category of its sound) so a whole family can be revoiced
   // to one kit/sound at once. This generalizes "switch the drum kit" to any
@@ -3080,12 +3051,16 @@ export default function SequencerWorkstation() {
       const noteEl = el.closest?.('[data-note-id]');
       const clipEl = el.closest?.('[data-ctx-clip]');
       const trackEl = el.closest?.('[data-ctx-track]');
+      // Inside the note sequencer the main menus make no sense (their targets
+      // live behind the overlay) — flag it so the piano transport menu opens.
+      const pianoEl = el.closest?.('[data-note-sequencer]');
       setCtxMenu({
         x: e.clientX,
         y: e.clientY,
         trackId: trackEl ? trackEl.getAttribute('data-ctx-track') : null,
         clipId: clipEl ? clipEl.getAttribute('data-ctx-clip') : null,
         noteId: noteEl ? noteEl.getAttribute('data-note-id') : null,
+        piano: !!pianoEl,
       });
     };
     window.addEventListener('contextmenu', onCtx);
@@ -3563,6 +3538,30 @@ export default function SequencerWorkstation() {
     },
   ]);
 
+  // Right-click menu inside the note sequencer: transport + mix only. No
+  // tour (its targets live behind the overlay) and no remove buttons.
+  const buildPianoMenu = (): CtxItem[] => ([
+    { label: 'Note sequencer', header: true },
+    { label: 'Play', hint: '▶', disabled: isPlaying, onClick: () => { if (!isPlayingRef.current) togglePlayback(); } },
+    { label: 'Stop', hint: '■', disabled: !isPlaying, onClick: () => { if (isPlayingRef.current) pauseTransport(false); } },
+    { label: 'Tempo', slider: { min: 40, max: 300, value: bpm, onChange: v => setBpm(v) } },
+    { separator: true, label: '' },
+    {
+      label: 'Mute all', hint: '🔇',
+      onClick: () => {
+        pushHistory();
+        setMutedTracks(Object.fromEntries(tracks.map(t => [t.id, true])));
+      },
+    },
+    {
+      label: 'Unmute all', hint: '🔊',
+      onClick: () => {
+        pushHistory();
+        setMutedTracks({});
+      },
+    },
+  ]);
+
   // ── Guided tour ────────────────────────────────────────────────────────────
   const TOUR_STEPS: TourStep[] = [
     {
@@ -3649,6 +3648,9 @@ export default function SequencerWorkstation() {
 
   useEffect(() => {
     if (tourStep === null) return;
+    // A tour always runs on the main views — drop the note-sequencer overlay
+    // so its targets are actually visible.
+    setSecretPiano(false);
     const v = TOUR_STEPS[tourStep]?.view;
     if (v) setActiveView(v);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3968,23 +3970,6 @@ export default function SequencerWorkstation() {
               ))}
             </select>
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#90a4ae' }}>
-            Drums to
-            <select
-              defaultValue=""
-              onChange={e => {
-                if (e.target.value) applyKitToDrums(e.target.value as DrumKitId);
-                e.target.value = '';
-              }}
-              style={{ ...selectStyle, color: '#ffd000', maxWidth: 150 }}
-              title="Put every drum track on this sampled kit"
-            >
-              <option value="" disabled>kit…</option>
-              {DRUM_KITS.map(k => (
-                <option key={k.id} value={k.id}>{k.name}</option>
-              ))}
-            </select>
-          </label>
           <button
             onClick={() => setKitMenuOpen(true)}
             className="btn-toolbar"
@@ -4273,7 +4258,7 @@ export default function SequencerWorkstation() {
         <ContextMenu
           x={ctxMenu.x}
           y={ctxMenu.y}
-          items={ctxNote ? [...buildNoteMenu(), ...(ctxTrack ? buildTrackMenu(ctxTrack) : [])] : ctxTrack ? [...buildBlockMenu(), ...buildTrackMenu(ctxTrack)] : buildGlobalMenu()}
+          items={ctxMenu.piano ? buildPianoMenu() : ctxNote ? [...buildNoteMenu(), ...(ctxTrack ? buildTrackMenu(ctxTrack) : [])] : ctxTrack ? [...buildBlockMenu(), ...buildTrackMenu(ctxTrack)] : buildGlobalMenu()}
           onClose={() => setCtxMenu(null)}
         />
       )}
@@ -4295,6 +4280,7 @@ export default function SequencerWorkstation() {
           title="Note sequencer"
           style={{
             position: 'fixed', left: 12, bottom: 12, zIndex: 9997,
+            transform: 'none',
             width: 34, height: 34, borderRadius: '50%',
             border: '1px solid #3b475d', background: '#171c29', color: '#607d8b',
             cursor: 'pointer', fontSize: 16, fontWeight: 800, lineHeight: 1,
@@ -4304,13 +4290,16 @@ export default function SequencerWorkstation() {
         </button>
       )}
 
-      {!mp3Booth && (
+      {/* The booth lives under the note sequencer when both are open, so its
+          launcher stays hidden while the sequencer is up. */}
+      {!mp3Booth && !secretPiano && (
         <button
           id="mp3-booth-btn"
           onClick={() => setMp3Booth(true)}
           title="MP3 → MIDI converter"
           style={{
             position: 'fixed', right: 12, bottom: 12, zIndex: 9997,
+            transform: 'none',
             minWidth: 34, height: 34, borderRadius: 8, padding: '0 8px',
             border: '1px solid #3b475d', background: '#171c29', color: '#00e5ff',
             cursor: 'pointer', fontSize: 11, fontWeight: 800, lineHeight: 1,
@@ -4361,7 +4350,24 @@ export default function SequencerWorkstation() {
             style={{ width: 'min(580px, 100%)', maxHeight: '84vh', overflowY: 'auto', background: '#12161f', border: '1px solid #3b475d', borderRadius: 12, boxShadow: '0 24px 60px #000c', padding: 18, color: '#dbe2e9' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-              <h2 style={{ margin: 0, fontSize: 16, color: '#00e5ff', fontWeight: 800 }}>🎛 Kit Manager</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <h2 style={{ margin: 0, fontSize: 16, color: '#00e5ff', fontWeight: 800 }}>🎛 Kit Manager</h2>
+                <div style={{ display: 'flex', border: '1px solid #3b475d', borderRadius: 7, overflow: 'hidden' }} title="Groups: one kit/sound for a whole family · Tracks: switch a single channel">
+                  {(['groups', 'tracks'] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setKitMenuMode(m)}
+                      style={{
+                        padding: '4px 12px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 800,
+                        background: kitMenuMode === m ? '#00e5ff' : '#1b2030',
+                        color: kitMenuMode === m ? '#000' : '#9ba8ba',
+                      }}
+                    >
+                      {m === 'groups' ? 'Groups' : 'Tracks'}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <button
                 onClick={() => setKitMenuOpen(false)}
                 style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #3b475d', background: '#1b2030', color: '#cfd8dc', cursor: 'pointer', fontSize: 13, fontWeight: 800 }}
@@ -4370,9 +4376,51 @@ export default function SequencerWorkstation() {
               </button>
             </div>
             <p style={{ margin: '0 0 14px', fontSize: 11, color: '#78909c', lineHeight: 1.5 }}>
-              Channels are grouped by the instrument family they play. Choose a kit (drums) or a sound
-              (everything else) for a group and every channel in it switches at once.
+              {kitMenuMode === 'groups'
+                ? 'Channels are grouped by the instrument family they play. Choose a kit (drums) or a sound (everything else) for a group and every channel in it switches at once.'
+                : 'Switch any single channel fast — pick its kit or sound and it changes (with a preview) right away.'}
             </p>
+            {kitMenuMode === 'tracks' ? (
+              tracks.length === 0
+                ? <div style={{ color: '#78909c', fontSize: 12 }}>No channels yet.</div>
+                : tracks.map(t => {
+                    const isDrums = DRUM_PIECE_FILE[t.type] !== undefined;
+                    const current = isDrums
+                      ? (trackDrumKit[t.id] ?? DEFAULT_DRUM_KIT)
+                      : (trackGmInstruments[t.id] ?? defaultGmForTrack(t));
+                    return (
+                      <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 10px', background: '#171c29', border: '1px solid #2c3547', borderRadius: 10 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                        <span style={{ flex: '0 1 140px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 700, color: '#e6ecf2' }} title={t.name}>
+                          {t.name}
+                        </span>
+                        <span style={{ fontSize: 9, color: '#78909c', border: '1px solid #3b475d', borderRadius: 999, padding: '1px 7px', flexShrink: 0 }}>
+                          {familyOf(t)}
+                        </span>
+                        <select
+                          value={String(current)}
+                          onChange={e => {
+                            if (isDrums) setTrackDrumKit(t.id, e.target.value as DrumKitId);
+                            else setChannelInstrument(t, Number(e.target.value));
+                          }}
+                          style={{ ...selectStyle, flex: 1, minWidth: 0, fontSize: 12, padding: '6px 8px', color: isDrums ? '#ffd000' : '#f9a825' }}
+                          title={isDrums ? `Drum kit for ${t.name}` : `Sound for ${t.name}`}
+                        >
+                          {isDrums ? (
+                            DRUM_KITS.map(k => <option key={k.id} value={k.id}>{k.name}</option>)
+                          ) : (
+                            Object.entries(groupedGmInstruments).map(([cat, insts]) => (
+                              <optgroup key={cat} label={cat}>
+                                {insts.map(inst => <option key={inst.id} value={inst.id}>{inst.name}</option>)}
+                              </optgroup>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                    );
+                  })
+            ) : (
+              <>
             {kitGroups.length === 0 && <div style={{ color: '#78909c', fontSize: 12 }}>No channels yet.</div>}
             {(() => {
               const trackById = new Map(tracks.map(t => [t.id, t]));
@@ -4422,6 +4470,8 @@ export default function SequencerWorkstation() {
                 );
               });
             })()}
+              </>
+            )}
           </div>
         </div>
       )}
