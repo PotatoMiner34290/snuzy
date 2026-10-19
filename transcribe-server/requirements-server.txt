@@ -1,0 +1,12 @@
+flask>=2.3
+numpy>=1.24
+
+# Optional transcription engines (install what you want to use):
+#   pip install transkun          # piano transcription (needs torch below)
+#   pip install mt3-infer         # multitrack drums/bass/keys (needs torch below)
+#
+# CPU torch (no GPU needed, slower):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# GPU torch: pick the matching build at https://pytorch.org/get-started/locally/
+# and install it BEFORE the packages above.

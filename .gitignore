@@ -64,3 +64,8 @@ AI_Context.txt
 AI_CONTEXT.txt
 
 # 
+# Local transcription server artifacts (models, caches — never commit)
+transcribe-server/.mt3_checkpoints/
+transcribe-server/pretrained/
+transcribe-server/__pycache__/
+transcribe-server/*.pyc

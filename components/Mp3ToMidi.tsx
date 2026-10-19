@@ -137,6 +137,113 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
   const analysingRef = useRef(false);
   const [aiPhase, setAiPhase] = useState<'idle' | 'loading' | 'ready' | 'working' | 'done' | 'error'>('idle');
   const [aiMsg, setAiMsg] = useState('');
+  // Local transcription server (runs outside the browser — a page cannot
+  // launch local programs). The studio POSTs WAV and gets MIDI back.
+  const [serverUrl, setServerUrl] = useState(() => {
+    try { return localStorage.getItem('snuzy_server_url') || 'http://127.0.0.1:8765'; } catch { return 'http://127.0.0.1:8765'; }
+  });
+  const [serverOnline, setServerOnline] = useState<boolean | null>(null);
+  const [serverEngines, setServerEngines] = useState<string[]>([]);
+  const [serverEngine, setServerEngine] = useState('auto');
+  const [serverPhase, setServerPhase] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
+  const [serverMsg, setServerMsg] = useState('');
+
+  const serverBase = (u: string) => u.replace(/\/$/, '');
+  const checkServer = async (u?: string): Promise<{ ok: boolean; engines: string[] }> => {
+    try {
+      const r = await fetch(`${serverBase(u ?? serverUrl)}/health`, { cache: 'no-store' });
+      if (!r.ok) return { ok: false, engines: [] };
+      const j = await r.json();
+      return { ok: !!j?.ok, engines: Array.isArray(j?.engines) ? j.engines : [] };
+    } catch {
+      return { ok: false, engines: [] };
+    }
+  };
+  const refreshServer = async (u?: string) => {
+    const st = await checkServer(u);
+    setServerOnline(st.ok);
+    setServerEngines(st.engines);
+    if (st.ok && st.engines.length > 0 && (serverEngine === 'auto' || !st.engines.includes(serverEngine))) {
+      setServerEngine(st.engines.includes('mt3') ? 'mt3' : st.engines[0]);
+    }
+  };
+  React.useEffect(() => { refreshServer(); }, []);
+  const saveServerUrl = (u: string) => {
+    setServerUrl(u);
+    try { localStorage.setItem('snuzy_server_url', u); } catch {}
+  };
+
+  const encodeWav = (buffer: AudioBuffer): Blob => {
+    const ch0 = buffer.getChannelData(0);
+    const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
+    const n = ch0.length;
+    const view = new DataView(new ArrayBuffer(44 + n * 2));
+    const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + n * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, buffer.sampleRate, true);
+    view.setUint32(28, buffer.sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) {
+      const v = ch1 ? (ch0[i] + ch1[i]) / 2 : ch0[i];
+      view.setInt16(44 + i * 2, Math.max(-32768, Math.min(32767, Math.round(v * 32767))), true);
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  };
+
+  const transcribeOnServer = async (engine: string) => {
+    const decoded = decodedRef.current;
+    if (!decoded || serverPhase === 'working') return;
+    setError('');
+    setServerPhase('working');
+    const startedAt = Date.now();
+    const tick = window.setInterval(() => {
+      const s = Math.floor((Date.now() - startedAt) / 1000);
+      setServerMsg(engine === 'stub'
+        ? 'Testing the connection…'
+        : `Transcribing on your machine… ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} elapsed (CPU takes minutes — GPU is ~10x faster)`);
+    }, 500);
+    try {
+      const base = serverBase(serverUrl);
+      const st = await checkServer();
+      setServerOnline(st.ok);
+      setServerEngines(st.engines);
+      if (!st.ok) throw new Error(`No server at ${base} — run transcribe-server/server.py first.`);
+      setServerMsg(engine === 'stub' ? 'Testing the connection…' : `Uploading to local server (${engine})…`);
+      const form = new FormData();
+      form.append('file', encodeWav(decoded), 'audio.wav');
+      form.append('engine', engine);
+      form.append('name', fileName.replace(/\.[^.]+$/, '') || 'server');
+      const r = await fetch(`${base}/transcribe`, { method: 'POST', body: form });
+      if (!r.ok) {
+        let msg = `Server error ${r.status}`;
+        try {
+          const j = await r.json();
+          if (j?.error) msg = j.error;
+        } catch {}
+        throw new Error(msg);
+      }
+      const midi = new Midi(await r.arrayBuffer());
+      const usable = midi.tracks.filter(t => t.notes.length > 0).length;
+      if (usable === 0) throw new Error('Server returned no notes — try another engine or louder audio.');
+      setServerPhase('done');
+      setServerMsg('');
+      onImport(midi, `${fileName.replace(/\.[^.]+$/, '') || 'audio'} (server ${engine})`);
+    } catch (err: unknown) {
+      setServerPhase('error');
+      setServerMsg(err instanceof Error ? err.message : 'Server transcription failed.');
+    } finally {
+      window.clearInterval(tick);
+    }
+  };
   // Transkun piano engine (lazy WASM session) + sustain pedal from its
   // pedal track, carried into the project import as CC64.
   const transkunRef = useRef<TranskunModel | null>(null);
@@ -448,6 +555,57 @@ export default function Mp3ToMidi({ bpm, onImport, onExit }: Props) {
         )}
 
         {error && <div style={{ marginTop: 12, fontSize: 12, color: '#ff8a80' }}>{error}</div>}
+
+        <div style={{ marginTop: 14, padding: 12, border: '1px solid #00796b', borderRadius: 10, background: '#101a1c' }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: '#4dd0e1' }}>Local AI server</div>
+          <div style={{ fontSize: 11, color: '#78909c', marginTop: 2, lineHeight: 1.5 }}>
+            Heavy transcription (multitrack drums/bass/keys) runs outside the browser.
+            Start <span style={{ color: '#cfd8dc' }}>transcribe-server/server.py</span>, then transcribe here.
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+            <span title={serverOnline ? `Online (${serverEngines.join(', ') || 'no engines'})` : 'Offline'} style={{ width: 9, height: 9, borderRadius: '50%', flexShrink: 0, background: serverOnline ? '#00e676' : serverOnline === false ? '#ff5252' : '#546e7a' }} />
+            <input
+              value={serverUrl}
+              onChange={e => saveServerUrl(e.target.value)}
+              spellCheck={false}
+              style={{ flex: 1, minWidth: 0, border: '1px solid #3b475d', borderRadius: 6, background: '#111722', color: '#dce4eb', padding: '5px 8px', fontSize: 11 }}
+            />
+            <button onClick={() => refreshServer()} title="Re-check the server" style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #3b475d', background: '#283247', color: '#dce4eb', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>↻</button>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <select
+              value={serverEngine}
+              onChange={e => setServerEngine(e.target.value)}
+              title="Transcription engine on the server"
+              style={{ flex: 1, minWidth: 0, border: '1px solid #3b475d', borderRadius: 6, background: '#111722', color: '#4dd0e1', padding: '6px 8px', fontSize: 12, cursor: 'pointer' }}
+            >
+              {(serverEngines.length > 0 ? serverEngines : ['transkun', 'mt3', 'stub']).flatMap(name => (
+                name === 'mt3' ? [name, 'mt3-fast'] : [name]
+              )).map(name => (
+                <option key={name} value={name} title={name === 'mt3-fast' ? 'Same drums engine, speed-built checkpoint (less accurate)' : undefined}>{name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => transcribeOnServer(serverEngine)}
+              disabled={!decodedRef.current || serverPhase === 'working' || serverOnline === false}
+              title="Send this audio to the local server and import the returned MIDI"
+              style={{ flex: 2, padding: '8px 12px', borderRadius: 8, border: 'none', background: decodedRef.current && serverOnline !== false ? '#00e676' : '#2a3144', color: decodedRef.current && serverOnline !== false ? '#000' : '#546e7a', cursor: decodedRef.current && serverOnline !== false ? 'pointer' : 'default', fontSize: 12, fontWeight: 800 }}
+            >
+              {serverPhase === 'working' ? 'Transcribing…' : 'Transcribe on server →'}
+            </button>
+            <button
+              onClick={() => transcribeOnServer('stub')}
+              disabled={!decodedRef.current || serverPhase === 'working' || serverOnline === false}
+              title="Import a test scale through the server to prove the wiring"
+              style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #3b475d', background: '#283247', color: '#dce4eb', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+            >
+              Test
+            </button>
+          </div>
+          {serverPhase !== 'idle' && serverMsg && (
+            <div style={{ marginTop: 8, fontSize: 12, color: serverPhase === 'error' ? '#ff8a80' : '#90a4ae' }}>{serverMsg}</div>
+          )}
+        </div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
           <button
