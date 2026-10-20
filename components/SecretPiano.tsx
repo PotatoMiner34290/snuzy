@@ -79,6 +79,9 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
 
   // Track the viewport width so the page renders as many steps as fit.
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Note layer whose --p (playback progress) is refreshed from the RAF clock,
+  // so the glow can swell smoothly without re-rendering every note.
+  const notesLayerRef = useRef<HTMLDivElement | null>(null);
   const [viewW, setViewW] = useState(0);
   React.useEffect(() => {
     const el = scrollRef.current;
@@ -149,6 +152,19 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
       if (Math.abs(next - posRef.current) >= 0.004) {
         posRef.current = next;
         setPos(next);
+      }
+      // Advance each visible note's glow with the playhead. Written straight to
+      // the DOM so the note layer stays memoized across frames.
+      const layer = notesLayerRef.current;
+      if (layer) {
+        for (let i = 0; i < layer.children.length; i++) {
+          const el = layer.children[i] as HTMLElement;
+          const start = Number(el.dataset.ns);
+          const dur = Number(el.dataset.nd);
+          if (!(dur > 0)) continue;
+          const p = Math.max(0, Math.min(1, (next - start) / dur));
+          el.style.setProperty('--p', p.toFixed(4));
+        }
       }
       raf = requestAnimationFrame(loop);
     };
@@ -263,6 +279,9 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
       out.push(
         <div
           key={n.key}
+          data-ns={n.absStep}
+          data-nd={n.duration}
+          className={sounding ? 'note-magic' : undefined}
           style={{
             position: 'absolute',
             left: x,
@@ -272,8 +291,9 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
             borderRadius: 3,
             background: n.color,
             opacity: sounding ? 1 : 0.85,
-            boxShadow: sounding ? `0 0 10px ${n.color}` : 'none',
-          }}
+            ['--nc']: n.color,
+            ['--p']: String(Math.max(0, Math.min(1, (nowStep - n.absStep) / n.duration))),
+          } as React.CSSProperties}
         />
       );
     }
@@ -334,7 +354,7 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
             fontWeight: 700,
             overflow: 'hidden',
             whiteSpace: 'nowrap',
-          }}
+          } as React.CSSProperties}
         >
           {black ? '' : pitchName(p)}
         </div>
@@ -401,7 +421,9 @@ export default function SecretPiano({ tracks, clips, sustain, armedRef, stepCoun
           <div style={{ position: 'sticky', left: 0, top: 24, zIndex: 3, width: KEYS_W, height: rows * ROW_H, background: '#05070b', borderRight: '1px solid #364055' }}>
             {keyRows}
           </div>
-          {bars}
+          <div ref={notesLayerRef} style={{ display: 'contents' }}>
+            {bars}
+          </div>
           <div style={{ position: 'absolute', top: 24, bottom: 0, left: playX, width: 2, background: '#fff', boxShadow: '0 0 10px #fff', zIndex: 2, pointerEvents: 'none' }} />
         </div>
       </div>

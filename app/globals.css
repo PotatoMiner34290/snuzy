@@ -334,6 +334,28 @@ button:active {
 .note-marquee { position: absolute; z-index: 6; border: 1px solid #00d9ef; background: rgba(0,217,239,0.16); border-radius: 2px; pointer-events: none; }
 @media (max-width: 760px) { .arrangement-heading, .piano-roll-toolbar { align-items: flex-start; flex-wrap: wrap; } .arrangement-hint { display: none; } }
 
+/* ── Note sequencer: aura + light that swell as a note plays out ──
+   --p is the note's playback progress (0 at onset → 1 at its end),
+   updated from the RAF clock; --nc is the track color. */
+.note-magic {
+  box-shadow:
+    0 0 calc(2px + var(--p, 0) * 10px) var(--nc, #00e5ff),
+    0 0 calc(4px + var(--p, 0) * 24px) var(--nc, #00e5ff);
+  filter: brightness(calc(1 + var(--p, 0) * 0.5));
+}
+.note-magic::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 6px;
+  background:
+    radial-gradient(ellipse at 30% 20%, #ffffffcc 0%, transparent 45%),
+    radial-gradient(ellipse at 75% 80%, var(--nc, #00e5ff) 0%, transparent 55%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  opacity: calc(0.08 + var(--p, 0) * 0.75);
+}
+
 /* Input range slider transition */
 input[type="range"] {
   transition: opacity 0.2s ease, filter 0.2s ease;
